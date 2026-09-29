@@ -200,6 +200,8 @@ alpha ≈ 0.34 就已经被推到满色。WebGL 是逐片元累加的，要 alph
 
 **在线试：** https://xiaozhi-6.github.io/webgl-particles/demo/
 
+**并排对比**（同一帧、两个后端同时跑）：https://xiaozhi-6.github.io/webgl-particles/demo/versus.html
+
 本地跑：
 
 ```bash
