@@ -16,7 +16,7 @@
 <h3><a href="https://xiaozhi-6.github.io/webgl-particles/demo/versus.html">▶ 打开并排对比演示</a></h3>
 <p>同一帧、同一套点云，Canvas2D 与 WebGL2 同时渲染，各自计时。</p>
 
-**中文 · [English](README_EN.md) · [技术细节](docs/TECHNICAL.md) · [接入指南](docs/INTEGRATION.md) · [实战记录](docs/blog-18fps-to-60fps.zh.md)**
+**中文 · [English](README_EN.md) · [技术细节](docs/TECHNICAL.md) · [GPU 成本结构](docs/FINDINGS-gpu-cost.md) · [测量陷阱](docs/MEASUREMENT-PITFALLS.md) · [接入指南](docs/INTEGRATION.md) · [实战记录](docs/blog-18fps-to-60fps.zh.md)**
 
 <sub>手机端 18fps → 60fps。画质从一开始就基本是对的：92.9% 的像素与 Canvas2D 的偏差在 ±0.5/255 以内。<br>
 我后来写过一个 alpha 修正公式，实测比什么都不做还差 39%，于是删掉了。<a href="docs/blog-18fps-to-60fps.zh.md">那三次被自己推翻的过程</a>。</sub>
@@ -61,6 +61,38 @@
 
 静止画面的差异肉眼看不出来，92.9% 的内容像素偏差在 ±0.5/255 以内。快速散开的过渡阶段
 WebGL 侧平均偏亮 8~23%，在真机上要刻意对比才看得出来。原因见[已知问题](#已知问题)。
+
+### 能扩到多大规模
+
+上面那 30 倍是特定场景的数字（静态点云、主线程 Canvas2D、44k 次 `arc`）。
+要判断这套技术能覆盖多大范围，需要一张与场景无关的成本表。
+
+**每帧成本 ≈ 填充率项 + 顶点/组织项**，其中填充率项 ∝ π × 半径² × 粒子数，
+顶点/组织项 ≈ 每粒子 5 ~ 8 ns（与半径无关）。
+
+NVIDIA GTX 1650 Ti、1800×1200 设备像素、半径 1.5 CSS px：
+
+| 粒子数 | 无状态运动 | 有状态积分（transform feedback） |
+|---|---|---|
+| 100,000 | 1.045 ms | 1.205 ms |
+| 500,000 | 4.245 ms | 4.788 ms |
+| **1,000,000** | **6.855 ms（≈146fps）** | 8.143 ms |
+
+**100 万粒子在 60fps 预算内。** 另有三条实测结论：
+
+- **半径是主导因素。** 半径 1.0 → 3.0（覆盖面积 9 倍），耗时涨 2.6 倍；
+  而把顶点着色器写复杂 3 倍，耗时只差 7~10%（噪声内）。
+  **优化应该朝向减少覆盖面积，不是减少顶点计算。**
+- **逐实例属性几乎免费。** 半径随机 ±1.0 与全部相同相比，100 万粒子下是
+  7.780 ms vs 8.080 ms —— 差异在噪声内。颜色、透明度同理。
+- **有状态积分净成本 +5~19%**，每粒子约 1.0~1.6 ns。
+
+完整表格、连线成本、以及四条独立的成本曲线见
+[GPU 成本结构](docs/FINDINGS-gpu-cost.md)。
+
+> **不适用场景**：连线（links）。连线是「元素间关系」，天然不是实例化的 ——
+> 每条边要实例化一个四边形，实测**每条边 18~27 ns，比渲染一个粒子还贵 2~3 倍**。
+> 60 万条边就吃满整个帧预算。这是架构差异，不是缺陷。
 
 ## 安装
 
@@ -214,6 +246,8 @@ pass，不划算。
 
 完整数据：[`docs/FINDINGS-real-figure.md`](docs/FINDINGS-real-figure.md) 与
 ├── docs/FINDINGS-expansion-fix.md   四边形扩边的修复（唯一的正向改动）
+├── docs/FINDINGS-gpu-cost.md        GPU 批量渲染的成本结构（规模上限、墙的位置）
+├── docs/MEASUREMENT-PITFALLS.md     测量陷阱（每条都曾导致错误结论）
 [`docs/TECHNICAL.md`](docs/TECHNICAL.md) 第 4 节。
 
 ## 目录结构
