@@ -39,12 +39,14 @@
 </div>
 
 <div class="ctrl">
-  <label>粒子数 <span class="v" id="vN">500,000</span></label>
-  <input id="rN" type="range" min="100000" max="1500000" step="100000" value="500000" />
-  <label>半径 <span class="v" id="vR">2.20</span></label>
-  <input id="rR" type="range" min="0.8" max="4" step="0.1" value="2.2" />
+  <label>粒子数 <span class="v" id="vN">200,000</span></label>
+  <input id="rN" type="range" min="50000" max="1000000" step="50000" value="200000" />
+  <label>半径 <span class="v" id="vR">2.60</span></label>
+  <input id="rR" type="range" min="1" max="5" step="0.1" value="2.6" />
   <label>流速 <span class="v" id="vS">1.00</span></label>
   <input id="rS" type="range" min="0" max="3" step="0.1" value="1" />
+  <label>流场尺度 <span class="v" id="vF">1.00</span></label>
+  <input id="rF" type="range" min="0.3" max="3" step="0.1" value="1" />
 </div>
 
 <div class="stats">
@@ -89,31 +91,61 @@ function sh(t, s, tag) {
 /* ============================================================================
    积分着色器：流场运动由 seed+time 在片元/顶点层算出，CPU 每帧只写 u_time
    ========================================================================== */
+/* 关键改动：把「方向场」换成【无散度流场】。
+ *
+ * 原来（错）：
+ *   ang = a1*3.1 + a2*1.7;  p += dir(ang) * 14;
+ * 这是【可压缩】的速度场，它把粒子不断吸到流场的稳定流形上，
+ * 最后粒子都被挤到几条一维曲线上 → 画面变成"稀疏的毛线"。
+ *
+ * 现在（对）：
+ *   用流函数 ψ 的旋度构造速度：
+ *     vx =  ∂ψ/∂y
+ *     vy = -∂ψ/∂x
+ * 无散度（∇·v = 0）的场是【保面积】的 —— 粒子分布既不集中也不稀释，
+ * 始终均匀铺开。这才是"流体感"。
+ */
 var SV = ['#version 300 es',
   'in vec2 a_pos;',
-  'uniform vec2 u_res; uniform float u_time; uniform float u_speed;',
+  'uniform vec2 u_res; uniform float u_time; uniform float u_speed; uniform float u_scale;',
   'uniform vec2 u_mouse; uniform float u_mouseOn;',
   'out vec2 v_pos;',
-  'void main(){',
+  '',
+  // 三个【随时间振荡位置】的涡旋 -> 混沌混合（blinking vortex）。
+  // 这一条是必须的：静态的散度为零场不会混合，只会把粒子分层到不变流形上，
+  // 表现为"粒子聚成几条线、其余地方空掉"。实测数据见 _ref/FINDINGS-flowfield-mixing.md
+  'vec2 vortex(vec2 p, vec2 c, float s, float core) {',
+  '  vec2 d = p - c;',
+  '  float r2 = dot(d, d) + core;',
+  '  return s * vec2(-d.y, d.x) / r2;',
+  '}',
+  '',
+  'void main() {',
   '  vec2 p = a_pos;',
-  // ---- 流场：用几层廉价的正弦叠加伪造噪声场，避免昂贵的 noise 函数 ----
   '  float t = u_time * u_speed;',
-  '  float x = p.x * 0.0035, y = p.y * 0.0035;',
-  '  float a1 = sin(y * 1.7 + t * 0.7) * cos(x * 1.3 - t * 0.5);',
-  '  float a2 = sin(x * 2.9 - t * 0.9 + a1 * 1.6);',
-  '  float ang = a1 * 3.1 + a2 * 1.7;',
-  '  vec2 dir = vec2(cos(ang), sin(ang));',
-  '  p += dir * (14.0 * u_speed);',
-  // ---- 鼠标扰动：径向排斥 ----
+  '  float S = length(u_res) * 0.5;',
+  '  float sc = u_scale;',
+  '  vec2 c1 = u_res*0.5 + vec2(cos(t*0.62), sin(t*0.83)) * S*0.42*sc;',
+  '  vec2 c2 = u_res*0.5 + vec2(cos(t*0.51+2.1), sin(t*0.71+1.3)) * S*0.38*sc;',
+  '  vec2 c3 = u_res*0.5 + vec2(cos(t*0.44+4.0), sin(t*0.59+3.1)) * S*0.46*sc;',
+  '  float core = S*0.010;',
+  '  vec2 v = vortex(p,c1, 1.00, core)',
+  '         + vortex(p,c2,-0.85, core)',
+  '         + vortex(p,c3, 0.70, core);',
+  '  vec2 d0 = p - u_res*0.5;',
+  '  v += vec2(-d0.y, d0.x) * 0.00035;',      // 整体旋转，带来大尺度剪切
+  '  p += v * (S * 180.0 * u_speed) * 0.016;',
+  '',
+  '  float r0 = length(d0) / max(S, 1.0);',
+  '  if (r0 > 0.9) { p -= normalize(d0 + 1e-6) * (r0 - 0.9) * S * 0.045; }',
+  '',
   '  if (u_mouseOn > 0.5) {',
-  '    vec2 d = p - u_mouse;',
-  '    float r = length(d);',
-  '    if (r < 180.0 && r > 0.001) {',
-  '      p += (d / r) * (1.0 - r / 180.0) * 26.0;',
-  '    }',
+  '    vec2 dm = p - u_mouse;',
+  '    float rm = length(dm);',
+  '    if (rm < 200.0 && rm > 0.001) { p += (dm / rm) * (1.0 - rm / 200.0) * 30.0; }',
   '  }',
-  // ---- 边界环绕（wrap）：流场用环绕比反弹更自然 ----
-  '  p = mod(p, u_res);',
+  '',
+  '  p = mod(p + u_res, u_res);',
   '  v_pos = p;',
   '  gl_Position = vec4(0.0);',
   '}'].join('\n');
@@ -168,7 +200,7 @@ GL.blendFuncSeparate(GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA, GL.ONE, GL.ONE_MINUS_
 
 var L_SP = GL.getAttribLocation(SP, 'a_pos');
 var U_SRES = GL.getUniformLocation(SP, 'u_res'), U_TIME = GL.getUniformLocation(SP, 'u_time'),
-    U_SPEED = GL.getUniformLocation(SP, 'u_speed'),
+    U_SPEED = GL.getUniformLocation(SP, 'u_speed'), U_SCALE = GL.getUniformLocation(SP, 'u_scale'),
     U_MOUSE = GL.getUniformLocation(SP, 'u_mouse'), U_MON = GL.getUniformLocation(SP, 'u_mouseOn');
 var L_DP = GL.getAttribLocation(DP, 'a_pos'), L_DC = GL.getAttribLocation(DP, 'a_col'),
     L_DA = GL.getAttribLocation(DP, 'a_al');
@@ -176,7 +208,7 @@ var U_RES = GL.getUniformLocation(DP, 'u_res'), U_RAD = GL.getUniformLocation(DP
     U_DPR = GL.getUniformLocation(DP, 'u_dpr');
 
 /* 状态：ping-pong，每粒子 2 个 float（位置） */
-var N = 500000, RAD = 2.2, SPEED = 1.0;
+var N = 200000, RAD = 2.6, SPEED = 1.0, FSCALE = 1.0;
 var W = 1, H = 1, DPR = 1;
 var bufA = null, bufB = null, colBuf = null, alBuf = null, TF = null;
 var mouse = [0, 0], mouseOn = 0;
@@ -208,8 +240,17 @@ function allocState(n) {
   GL.bufferData(GL.ARRAY_BUFFER, al, GL.STATIC_DRAW);
 }
 
+/* DPR 封顶：弱设备上压设备像素总量，帧率提升明显（ctdxz 上验证过这条路）。
+   上限约 260 万设备像素；超过就按面积反推一个更小的比例。 */
+function cappedDPR() {
+  var nat = window.devicePixelRatio || 1;
+  var cssArea = window.innerWidth * window.innerHeight;
+  var natArea = cssArea * nat * nat;
+  if (natArea > 2600000) return Math.max(1, Math.sqrt(2600000 / cssArea));
+  return nat;
+}
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  DPR = cappedDPR();
   W = Math.max(320, window.innerWidth);
   H = Math.max(240, window.innerHeight);
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
@@ -223,6 +264,7 @@ function frame(t) {
   GL.uniform2f(U_SRES, W, H);
   GL.uniform1f(U_TIME, t);
   GL.uniform1f(U_SPEED, SPEED);
+  GL.uniform1f(U_SCALE, FSCALE);
   GL.uniform2f(U_MOUSE, mouse[0], mouse[1]);
   GL.uniform1f(U_MON, mouseOn);
 
@@ -302,8 +344,10 @@ window.addEventListener('touchmove', function (e) {
 }, { passive: true });
 window.addEventListener('touchend', function () { mouseOn = 0; });
 
-var rN = document.getElementById('rN'), rR = document.getElementById('rR'), rS = document.getElementById('rS');
-var vN = document.getElementById('vN'), vR = document.getElementById('vR'), vS = document.getElementById('vS');
+var rN = document.getElementById('rN'), rR = document.getElementById('rR'),
+    rS = document.getElementById('rS'), rF = document.getElementById('rF');
+var vN = document.getElementById('vN'), vR = document.getElementById('vR'),
+    vS = document.getElementById('vS'), vF = document.getElementById('vF');
 var tmr = 0;
 rN.oninput = function () {
   vN.textContent = (+rN.value).toLocaleString();
@@ -311,6 +355,7 @@ rN.oninput = function () {
 };
 rR.oninput = function () { RAD = +rR.value; vR.textContent = RAD.toFixed(2); };
 rS.oninput = function () { SPEED = +rS.value; vS.textContent = SPEED.toFixed(2); };
+rF.oninput = function () { FSCALE = +rF.value; vF.textContent = FSCALE.toFixed(2); };
 
 /* ---------------- 起动 ---------------- */
 resize();
