@@ -34,13 +34,13 @@
 <canvas id="stage"></canvas>
 
 <div class="hud">
-  <h1>流场 · 100 万粒子</h1>
-  <p>运动在 GPU 上计算，CPU 每帧只写一个时间值</p>
+  <h1>流场 · GPU 粒子</h1>
+  <p>运动在 GPU 上计算，CPU 每帧只写一个时间值 · 卡就降低粒子数</p>
 </div>
 
 <div class="ctrl">
-  <label>粒子数 <span class="v" id="vN">1,000,000</span></label>
-  <input id="rN" type="range" min="100000" max="1500000" step="100000" value="1000000" />
+  <label>粒子数 <span class="v" id="vN">500,000</span></label>
+  <input id="rN" type="range" min="100000" max="1500000" step="100000" value="500000" />
   <label>半径 <span class="v" id="vR">2.20</span></label>
   <input id="rR" type="range" min="0.8" max="4" step="0.1" value="2.2" />
   <label>流速 <span class="v" id="vS">1.00</span></label>
@@ -49,7 +49,7 @@
 
 <div class="stats">
   <div class="stat"><b id="sFps">—</b><span>帧率</span></div>
-  <div class="stat"><b id="sMs">—</b><span>GPU 每帧</span></div>
+  <div class="stat"><b id="sMs">1</b><span>绘制调用/帧</span></div>
   <div class="stat"><b id="sCpu">—</b><span>CPU 每帧</span></div>
   <div class="stat"><b id="sGpu">—</b><span>显卡</span></div>
 </div>
@@ -176,7 +176,7 @@ var U_RES = GL.getUniformLocation(DP, 'u_res'), U_RAD = GL.getUniformLocation(DP
     U_DPR = GL.getUniformLocation(DP, 'u_dpr');
 
 /* 状态：ping-pong，每粒子 2 个 float（位置） */
-var N = 1000000, RAD = 2.2, SPEED = 1.0;
+var N = 500000, RAD = 2.2, SPEED = 1.0;
 var W = 1, H = 1, DPR = 1;
 var bufA = null, bufB = null, colBuf = null, alBuf = null, TF = null;
 var mouse = [0, 0], mouseOn = 0;
@@ -261,8 +261,8 @@ function frame(t) {
 }
 
 /* ---------------- 主循环 ---------------- */
-var last = performance.now(), t0 = last, frames = 0, accMs = 0, accCpu = 0, qPending = null;
-var fpsEl = document.getElementById('sFps'), msEl = document.getElementById('sMs'), cpuEl = document.getElementById('sCpu');
+var last = performance.now(), t0 = last, frames = 0, accCpu = 0, qPending = null;
+var fpsEl = document.getElementById('sFps'), gpuEl = document.getElementById('sMs'), cpuEl = document.getElementById('sCpu');
 
 function loop() {
   requestAnimationFrame(loop);
@@ -276,11 +276,6 @@ function loop() {
   accCpu += (c1 - c0);
   frames++;
   // GPU 侧计时：需要等这一帧做完，所以延后一帧读
-  if (qPending === null) {
-    qPending = GL.createQuery();
-    if (GL.getParameter(GL.CURRENT_PROGRAM) !== null) {}
-  }
-
   if (frames >= 30) {
     var fps = 1000 / ((now - t0) / frames);
     fpsEl.textContent = fps.toFixed(0);
