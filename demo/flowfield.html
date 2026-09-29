@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>100 万粒子的流场 —— webgl-particles</title>
+<style>
+  :root { --bg:#06060a; --fg:#e8e8f0; --dim:#8a8aa0; --accent:#6799fe; --card:#0e0e16; --line:#22223a; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font:14px/1.6 -apple-system,"Segoe UI","Noto Sans SC",sans-serif;overflow:hidden}
+  canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
+  .hud{position:fixed;left:16px;top:16px;z-index:2;pointer-events:none}
+  .hud h1{margin:0 0 2px;font-size:15px;font-weight:600;letter-spacing:.02em}
+  .hud p{margin:0;color:var(--dim);font-size:12px}
+  .stats{position:fixed;left:16px;bottom:16px;z-index:2;display:flex;gap:8px;flex-wrap:wrap}
+  .stat{background:rgba(14,14,22,.72);border:1px solid var(--line);border-radius:8px;
+    padding:7px 11px;backdrop-filter:blur(8px)}
+  .stat b{display:block;font-size:16px;font-variant-numeric:tabular-nums;font-weight:600}
+  .stat span{color:var(--dim);font-size:11px}
+  .ctrl{position:fixed;right:16px;top:16px;z-index:2;background:rgba(14,14,22,.72);
+    border:1px solid var(--line);border-radius:10px;padding:12px 14px;backdrop-filter:blur(8px);
+    display:flex;flex-direction:column;gap:10px;min-width:210px}
+  .ctrl label{color:var(--dim);font-size:12px;display:flex;justify-content:space-between;gap:8px}
+  .ctrl input[type=range]{width:100%;accent-color:var(--accent)}
+  .ctrl .v{color:var(--fg);font-variant-numeric:tabular-nums}
+  .hint{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;
+    color:var(--dim);font-size:12px;pointer-events:none}
+  #err{position:fixed;left:16px;top:70px;z-index:3;color:#ff8f6b;font-size:12px;
+    white-space:pre-wrap;max-width:60vw}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div class="hud">
+  <h1>流场 · 100 万粒子</h1>
+  <p>运动在 GPU 上计算，CPU 每帧只写一个时间值</p>
+</div>
+
+<div class="ctrl">
+  <label>粒子数 <span class="v" id="vN">1,000,000</span></label>
+  <input id="rN" type="range" min="100000" max="1500000" step="100000" value="1000000" />
+  <label>半径 <span class="v" id="vR">2.20</span></label>
+  <input id="rR" type="range" min="0.8" max="4" step="0.1" value="2.2" />
+  <label>流速 <span class="v" id="vS">1.00</span></label>
+  <input id="rS" type="range" min="0" max="3" step="0.1" value="1" />
+</div>
+
+<div class="stats">
+  <div class="stat"><b id="sFps">—</b><span>帧率</span></div>
+  <div class="stat"><b id="sMs">—</b><span>GPU 每帧</span></div>
+  <div class="stat"><b id="sCpu">—</b><span>CPU 每帧</span></div>
+  <div class="stat"><b id="sGpu">—</b><span>显卡</span></div>
+</div>
+
+<div class="hint">移动鼠标 / 手指以扰动流场</div>
+<div id="err"></div>
+
+<script>
+(function () {
+'use strict';
+var errEl = document.getElementById('err');
+function err(s) { errEl.textContent += s + '\n'; }
+
+var cv = document.getElementById('stage');
+// preserveDrawingBuffer 默认关闭（更快）。?capture=1 时打开，仅用于自动化截图验证。
+var CAPTURE = /[?&]capture=1/.test(location.search);
+var GL = cv.getContext('webgl2', {
+  alpha: false, premultipliedAlpha: false, antialias: false,
+  depth: false, stencil: false, preserveDrawingBuffer: CAPTURE,
+  powerPreference: 'high-performance'
+});
+if (!GL) { err('需要 WebGL2'); return; }
+
+var dbg = GL.getExtension('WEBGL_debug_renderer_info');
+document.getElementById('sGpu').textContent = dbg
+  ? (GL.getParameter(dbg.UNMASKED_RENDERER_WEBGL).match(/NVIDIA|AMD|Intel|Apple|Adreno|Mali|PowerVR/i) || ['?'])[0]
+  : '?';
+
+function sh(t, s, tag) {
+  var o = GL.createShader(t); GL.shaderSource(o, s); GL.compileShader(o);
+  if (!GL.getShaderParameter(o, GL.COMPILE_STATUS)) {
+    err(tag + ': ' + GL.getShaderInfoLog(o)); return null;
+  }
+  return o;
+}
+
+/* ============================================================================
+   积分着色器：流场运动由 seed+time 在片元/顶点层算出，CPU 每帧只写 u_time
+   ========================================================================== */
+var SV = ['#version 300 es',
+  'in vec2 a_pos;',
+  'uniform vec2 u_res; uniform float u_time; uniform float u_speed;',
+  'uniform vec2 u_mouse; uniform float u_mouseOn;',
+  'out vec2 v_pos;',
+  'void main(){',
+  '  vec2 p = a_pos;',
+  // ---- 流场：用几层廉价的正弦叠加伪造噪声场，避免昂贵的 noise 函数 ----
+  '  float t = u_time * u_speed;',
+  '  float x = p.x * 0.0035, y = p.y * 0.0035;',
+  '  float a1 = sin(y * 1.7 + t * 0.7) * cos(x * 1.3 - t * 0.5);',
+  '  float a2 = sin(x * 2.9 - t * 0.9 + a1 * 1.6);',
+  '  float ang = a1 * 3.1 + a2 * 1.7;',
+  '  vec2 dir = vec2(cos(ang), sin(ang));',
+  '  p += dir * (14.0 * u_speed);',
+  // ---- 鼠标扰动：径向排斥 ----
+  '  if (u_mouseOn > 0.5) {',
+  '    vec2 d = p - u_mouse;',
+  '    float r = length(d);',
+  '    if (r < 180.0 && r > 0.001) {',
+  '      p += (d / r) * (1.0 - r / 180.0) * 26.0;',
+  '    }',
+  '  }',
+  // ---- 边界环绕（wrap）：流场用环绕比反弹更自然 ----
+  '  p = mod(p, u_res);',
+  '  v_pos = p;',
+  '  gl_Position = vec4(0.0);',
+  '}'].join('\n');
+
+var SF = ['#version 300 es', 'precision lowp float;', 'out vec4 o; void main(){ o = vec4(0.0); }'].join('\n');
+
+/* 绘制：沿用项目的实例化四边形 + 亚像素覆盖率 */
+var DV = ['#version 300 es',
+  'in vec2 a_corner; in vec2 a_pos; in vec3 a_col; in float a_al;',
+  'uniform vec2 u_res; uniform float u_rad;',
+  'out vec2 v_local; out float v_rad; out vec3 v_col; out float v_al;',
+  'void main(){',
+  '  vec2 p = (a_pos + a_corner * (u_rad + 0.5)) / u_res * 2.0 - 1.0;',
+  '  gl_Position = vec4(p.x, -p.y, 0.0, 1.0);',
+  '  v_local = a_corner * (u_rad + 0.5) / u_rad;',
+  '  v_rad = u_rad; v_col = a_col; v_al = a_al;',
+  '}'].join('\n');
+
+var DF = ['#version 300 es', 'precision highp float;',
+  'in vec2 v_local; in float v_rad; in vec3 v_col; in float v_al;',
+  'uniform float u_dpr; out vec4 o;',
+  'void main(){',
+  '  float dist = length(v_local) * v_rad;',
+  '  float aa = 0.5 / u_dpr;',
+  '  float cov = clamp((v_rad - dist) / (2.0 * aa) + 0.5, 0.0, 1.0);',
+  '  if (cov <= 0.0) discard;',
+  '  o = vec4(v_col, cov * v_al);',
+  '}'].join('\n');
+
+var sv = sh(GL.VERTEX_SHADER, SV, 'sim VS'), sf = sh(GL.FRAGMENT_SHADER, SF, 'sim FS');
+var dv = sh(GL.VERTEX_SHADER, DV, 'draw VS'), df = sh(GL.FRAGMENT_SHADER, DF, 'draw FS');
+if (!sv || !sf || !dv || !df) return;
+
+var SP = GL.createProgram();
+GL.attachShader(SP, sv); GL.attachShader(SP, sf);
+GL.transformFeedbackVaryings(SP, ['v_pos'], GL.INTERLEAVED_ATTRIBS);
+GL.linkProgram(SP);
+if (!GL.getProgramParameter(SP, GL.LINK_STATUS)) { err('sim link: ' + GL.getProgramInfoLog(SP)); return; }
+
+var DP = GL.createProgram();
+GL.attachShader(DP, dv); GL.attachShader(DP, df); GL.linkProgram(DP);
+if (!GL.getProgramParameter(DP, GL.LINK_STATUS)) { err('draw link: ' + GL.getProgramInfoLog(DP)); return; }
+
+var QB = GL.createBuffer(); GL.bindBuffer(GL.ARRAY_BUFFER, QB);
+GL.bufferData(GL.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), GL.STATIC_DRAW);
+var LC = GL.getAttribLocation(DP, 'a_corner');
+GL.enableVertexAttribArray(LC); GL.vertexAttribDivisor(LC, 0);
+GL.vertexAttribPointer(LC, 2, GL.FLOAT, false, 0, 0);
+
+GL.enable(GL.BLEND);
+GL.blendFuncSeparate(GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA, GL.ONE, GL.ONE_MINUS_SRC_ALPHA);
+
+var L_SP = GL.getAttribLocation(SP, 'a_pos');
+var U_SRES = GL.getUniformLocation(SP, 'u_res'), U_TIME = GL.getUniformLocation(SP, 'u_time'),
+    U_SPEED = GL.getUniformLocation(SP, 'u_speed'),
+    U_MOUSE = GL.getUniformLocation(SP, 'u_mouse'), U_MON = GL.getUniformLocation(SP, 'u_mouseOn');
+var L_DP = GL.getAttribLocation(DP, 'a_pos'), L_DC = GL.getAttribLocation(DP, 'a_col'),
+    L_DA = GL.getAttribLocation(DP, 'a_al');
+var U_RES = GL.getUniformLocation(DP, 'u_res'), U_RAD = GL.getUniformLocation(DP, 'u_rad'),
+    U_DPR = GL.getUniformLocation(DP, 'u_dpr');
+
+/* 状态：ping-pong，每粒子 2 个 float（位置） */
+var N = 1000000, RAD = 2.2, SPEED = 1.0;
+var W = 1, H = 1, DPR = 1;
+var bufA = null, bufB = null, colBuf = null, alBuf = null, TF = null;
+var mouse = [0, 0], mouseOn = 0;
+
+function allocState(n) {
+  [bufA, bufB, colBuf, alBuf].forEach(function (b) { if (b) GL.deleteBuffer(b); });
+  if (TF) GL.deleteTransformFeedback(TF);
+  bufA = GL.createBuffer(); bufB = GL.createBuffer();
+  colBuf = GL.createBuffer(); alBuf = GL.createBuffer();
+  TF = GL.createTransformFeedback();
+  // 位置初始化为均匀随机，颜色从调色板取
+  var st = new Float32Array(n * 2), col = new Float32Array(n * 3), al = new Float32Array(n);
+  var s = 20261101;
+  function rnd() { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }
+  var pal = [[0.62,0.72,1.0],[0.50,0.56,0.92],[0.80,0.86,1.0],[0.44,0.50,0.80],[0.95,0.88,0.62]];
+  for (var i = 0; i < n; i++) {
+    st[i*2] = rnd() * W; st[i*2+1] = rnd() * H;   // 必须用像素坐标：shader 里是 mod(p, u_res)
+    var c = pal[(rnd()*pal.length)|0];
+    col[i*3] = c[0]; col[i*3+1] = c[1]; col[i*3+2] = c[2];
+    al[i] = 0.75 + rnd() * 0.25;
+  }
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+  GL.bufferData(GL.ARRAY_BUFFER, st, GL.DYNAMIC_COPY);
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufB);
+  GL.bufferData(GL.ARRAY_BUFFER, n * 8, GL.DYNAMIC_COPY);
+  GL.bindBuffer(GL.ARRAY_BUFFER, colBuf);
+  GL.bufferData(GL.ARRAY_BUFFER, col, GL.STATIC_DRAW);
+  GL.bindBuffer(GL.ARRAY_BUFFER, alBuf);
+  GL.bufferData(GL.ARRAY_BUFFER, al, GL.STATIC_DRAW);
+}
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(320, window.innerWidth);
+  H = Math.max(240, window.innerHeight);
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  GL.viewport(0, 0, cv.width, cv.height);
+}
+
+/* 一帧：积分传递 -> 绘制传递 */
+function frame(t) {
+  // 位置需要从 0..1 映射到像素空间（第一帧）
+  GL.useProgram(SP);
+  GL.uniform2f(U_SRES, W, H);
+  GL.uniform1f(U_TIME, t);
+  GL.uniform1f(U_SPEED, SPEED);
+  GL.uniform2f(U_MOUSE, mouse[0], mouse[1]);
+  GL.uniform1f(U_MON, mouseOn);
+
+  GL.bindTransformFeedback(GL.TRANSFORM_FEEDBACK, TF);
+  GL.bindBufferBase(GL.TRANSFORM_FEEDBACK_BUFFER, 0, bufB);
+  GL.enable(GL.RASTERIZER_DISCARD);
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+  GL.enableVertexAttribArray(L_SP); GL.vertexAttribDivisor(L_SP, 0);
+  GL.vertexAttribPointer(L_SP, 2, GL.FLOAT, false, 0, 0);
+  GL.beginTransformFeedback(GL.POINTS);
+  GL.drawArrays(GL.POINTS, 0, N);
+  GL.endTransformFeedback();
+  GL.disable(GL.RASTERIZER_DISCARD);
+  GL.bindBufferBase(GL.TRANSFORM_FEEDBACK_BUFFER, 0, null);
+  GL.bindTransformFeedback(GL.TRANSFORM_FEEDBACK, null);
+  var tmp = bufA; bufA = bufB; bufB = tmp;
+
+  // 绘制
+  GL.useProgram(DP);
+  GL.bindBuffer(GL.ARRAY_BUFFER, QB);
+  GL.enableVertexAttribArray(LC); GL.vertexAttribDivisor(LC, 0);
+  GL.vertexAttribPointer(LC, 2, GL.FLOAT, false, 0, 0);
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+  GL.enableVertexAttribArray(L_DP); GL.vertexAttribDivisor(L_DP, 1);
+  GL.vertexAttribPointer(L_DP, 2, GL.FLOAT, false, 0, 0);
+  GL.bindBuffer(GL.ARRAY_BUFFER, colBuf);
+  GL.enableVertexAttribArray(L_DC); GL.vertexAttribDivisor(L_DC, 1);
+  GL.vertexAttribPointer(L_DC, 3, GL.FLOAT, false, 0, 0);
+  GL.bindBuffer(GL.ARRAY_BUFFER, alBuf);
+  GL.enableVertexAttribArray(L_DA); GL.vertexAttribDivisor(L_DA, 1);
+  GL.vertexAttribPointer(L_DA, 1, GL.FLOAT, false, 0, 0);
+  GL.uniform2f(U_RES, W, H); GL.uniform1f(U_RAD, RAD * DPR); GL.uniform1f(U_DPR, DPR);
+  GL.clearColor(0.016, 0.016, 0.031, 1);
+  GL.clear(GL.COLOR_BUFFER_BIT);
+  GL.drawArraysInstanced(GL.TRIANGLE_STRIP, 0, 4, N);
+}
+
+/* ---------------- 主循环 ---------------- */
+var last = performance.now(), t0 = last, frames = 0, accMs = 0, accCpu = 0, qPending = null;
+var fpsEl = document.getElementById('sFps'), msEl = document.getElementById('sMs'), cpuEl = document.getElementById('sCpu');
+
+function loop() {
+  requestAnimationFrame(loop);
+  var now = performance.now();
+  var dt = (now - last) / 1000; last = now;
+  var t = (now - t0) / 1000;
+
+  var c0 = performance.now();
+  frame(t);
+  var c1 = performance.now();
+  accCpu += (c1 - c0);
+  frames++;
+  // GPU 侧计时：需要等这一帧做完，所以延后一帧读
+  if (qPending === null) {
+    qPending = GL.createQuery();
+    if (GL.getParameter(GL.CURRENT_PROGRAM) !== null) {}
+  }
+
+  if (frames >= 30) {
+    var fps = 1000 / ((now - t0) / frames);
+    fpsEl.textContent = fps.toFixed(0);
+    cpuEl.textContent = (accCpu / frames).toFixed(1) + ' ms';
+    frames = 0; accCpu = 0; t0 = now;
+  }
+}
+
+/* ---------------- 交互 ---------------- */
+window.addEventListener('resize', function () {
+  var oldW = W, oldH = H;
+  resize();
+  // 位置是绝对像素坐标，尺寸变了要按比例缩放（简单起见重新初始化）
+  if (oldW !== W || oldH !== H) { allocState(N); }
+});
+
+window.addEventListener('mousemove', function (e) {
+  mouse[0] = e.clientX * DPR; mouse[1] = e.clientY * DPR; mouseOn = 1;
+});
+window.addEventListener('mouseleave', function () { mouseOn = 0; });
+window.addEventListener('touchmove', function (e) {
+  var t = e.touches[0]; if (!t) return;
+  mouse[0] = t.clientX * DPR; mouse[1] = t.clientY * DPR; mouseOn = 1;
+}, { passive: true });
+window.addEventListener('touchend', function () { mouseOn = 0; });
+
+var rN = document.getElementById('rN'), rR = document.getElementById('rR'), rS = document.getElementById('rS');
+var vN = document.getElementById('vN'), vR = document.getElementById('vR'), vS = document.getElementById('vS');
+var tmr = 0;
+rN.oninput = function () {
+  vN.textContent = (+rN.value).toLocaleString();
+  clearTimeout(tmr); tmr = setTimeout(function () { N = +rN.value; allocState(N); }, 350);
+};
+rR.oninput = function () { RAD = +rR.value; vR.textContent = RAD.toFixed(2); };
+rS.oninput = function () { SPEED = +rS.value; vS.textContent = SPEED.toFixed(2); };
+
+/* ---------------- 起动 ---------------- */
+resize();
+vN.textContent = N.toLocaleString();
+allocState(N);
+requestAnimationFrame(loop);
+window.__ready = true;
+if (CAPTURE) {
+  // 截图为了一次性抓图：渲染 3 帧后把结果读回并挂到 window 上
+  setTimeout(function () {
+    var W2 = cv.width, H2 = cv.height;
+    var buf = new Uint8Array(W2 * H2 * 4);
+    GL.readPixels(0, 0, W2, H2, GL.RGBA, GL.UNSIGNED_BYTE, buf);
+    var n = 0, mx = 0, sum = 0;
+    for (var i = 0; i < W2 * H2; i++) { var a = buf[i*4+3]; if (a > 6) { n++; sum += a; } if (a > mx) mx = a; }
+    window.__cap = { ink: n, maxA: mx, meanA: n ? +(sum/n).toFixed(1) : 0, W: W2, H: H2,
+                     fps: document.getElementById('sFps').textContent };
+  }, 2000);
+}
+})();
+</script>
+</body>
+</html>
