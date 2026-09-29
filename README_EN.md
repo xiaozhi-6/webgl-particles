@@ -16,7 +16,7 @@
 <h3><a href="https://xiaozhi-6.github.io/webgl-particles/demo/versus.html">▶ Open the side-by-side demo</a></h3>
 <p>Same frame, same point cloud, Canvas2D and WebGL2 rendering at once, each timed separately.</p>
 
-**中文 · English · [Technical notes](docs/TECHNICAL.md) · [Integration](docs/INTEGRATION.md)**
+**中文 · English · [Technical notes](docs/TECHNICAL.md) · [GPU cost structure](docs/FINDINGS-gpu-cost.md) · [Measurement pitfalls](docs/MEASUREMENT-PITFALLS.md) · [Integration](docs/INTEGRATION.md)**
 
 <sub>18fps → 60fps on mobile. The image was essentially correct from the start: 92.9% of pixels are
 within ±0.5/255 of Canvas2D. An alpha correction I later derived turned out to be
@@ -66,6 +66,42 @@ accounts for 1.6% of the frame.
 Static views are visually identical; 92.9% of content pixels are within ±0.5/255. During rapid
 scatter transitions the WebGL path reads 8–23% brighter on average, which on device requires
 deliberate comparison to notice. See [Known limitations](#known-limitations).
+
+### How far it scales
+
+The 30× above is a scenario-specific number (static point cloud, main-thread Canvas2D,
+44k `arc` calls). To judge how wide this technique reaches, you need a cost table that is
+independent of the scenario.
+
+**Per-frame cost ≈ fill-rate term + vertex/organisation term**, where the fill-rate term
+is proportional to π × radius² × particle count, and the vertex term is about 5–8 ns per
+particle (independent of radius).
+
+NVIDIA GTX 1650 Ti, 1800×1200 device pixels, radius 1.5 CSS px:
+
+| Particles | Stateless motion | Stateful integration (transform feedback) |
+|---|---|---|
+| 100,000 | 1.045 ms | 1.205 ms |
+| 500,000 | 4.245 ms | 4.788 ms |
+| **1,000,000** | **6.855 ms (≈146fps)** | 8.143 ms |
+
+**One million particles fits in the 60fps budget.** Three further measured findings:
+
+- **Radius dominates.** Going from radius 1.0 to 3.0 (9× the coverage) costs 2.6× the time,
+  while making the vertex shader 3× more complex changes it by only 7–10% (within noise).
+  **Optimise coverage, not vertex math.**
+- **Per-instance attributes are essentially free.** Random radius ±1.0 versus a uniform
+  radius, at one million particles: 7.780 ms vs 8.080 ms — within noise. Same for colour
+  and opacity.
+- **Stateful integration costs +5–19%**, about 1.0–1.6 ns per particle.
+
+The full tables, the cost of links, and four independent cost curves are in
+[GPU cost structure](docs/FINDINGS-gpu-cost.md).
+
+> **What it is not for**: links. Links are a *relationship between elements*, which is
+> inherently not instanced — each edge needs its own quad, measured at **18–27 ns per edge,
+> 2–3× more expensive than rendering a particle**. 600,000 edges exhaust an entire frame
+> budget. That is an architectural difference, not a defect.
 
 ## Install
 
@@ -226,6 +262,8 @@ Mobile frame time unchanged (tablet 16.7 ms, phone 16.6 ms).
 
 Full data: [`docs/FINDINGS-real-figure.md`](docs/FINDINGS-real-figure.md) and
 ├── docs/FINDINGS-expansion-fix.md   The quad-expansion fix (the one positive change)
+├── docs/FINDINGS-gpu-cost.md       GPU batch rendering cost structure
+├── docs/MEASUREMENT-PITFALLS.md    Measurement pitfalls (each one caused a wrong conclusion)
 [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
 
 ## Layout
