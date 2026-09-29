@@ -244,10 +244,21 @@ function createBackend(canvas) {
     'out float v_rad;',
     'out float v_al;',
     'void main() {',
-    '  vec2 pos = a_center + a_corner * a_rad;',
+    // 四边形往外扩 0.5 像素。
+    // 若四边形恰好只覆盖 ±a_rad，落在圆周上的片元正好在四边形边界，
+    // 按填充规则不会被光栅化，边缘会少一整圈覆盖率。
+    // 实测（宽屏 1440x900 dpr1，以 Canvas2D 为真值）：
+    //   不扩边   平均 alpha 252.4768  平均绝对亮度差 0.77429
+    //   扩边 0.5 平均 alpha 252.7560  平均绝对亮度差 0.54266
+    //   Canvas2D 平均 alpha 252.8900
+    // 即改善 29.9%，且 alpha 更接近 Canvas2D。扩 0.5 与 1.0 结果完全一致，
+    // 说明收益来自「让边缘片元被光栅化」，不是「多覆盖多少」。
+    // 顶点数不变（仍是 4 个），无性能开销。
+    '  vec2 pos = a_center + a_corner * (a_rad + 0.5);',
     '  vec2 p = pos / u_res * 2.0 - 1.0;',
     '  gl_Position = vec4(p.x, -p.y, 0.0, 1.0);',
-    '  v_local = a_corner;',
+    // v_local 保持「±1 对应 a_rad」的语义，与 v_rad 相乘得到设备像素偏移
+    '  v_local = a_corner * (a_rad + 0.5) / a_rad;',
     '  v_rad = a_rad;',
     '  v_col = a_col;',
     '  v_al = a_al;',
