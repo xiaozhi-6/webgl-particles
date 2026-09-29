@@ -1,108 +1,103 @@
-# 接入指南：怎么接到已有项目里
+# 接入指南
 
-目标是**风险可控地**换掉一个已经很满意、但在移动端卡的粒子层。
+给一个已经在跑、观感也满意，只是移动端卡的粒子层做替换。下面按风险从低到高的顺序写。
 
 ---
 
-## 1. 最保守的接法：加一个开关，默认先不开
+## 1. 先加开关，别急着改默认值
 
-不要一上来就换默认路径。先让两条渲染路径并存，用 URL 参数切换：
+不要一上来就把默认路径换掉。两条渲染路径并存，用 URL 参数切换：
 
 ```js
-// 默认走 WebGL；地址加 ?gl=0 立刻回到 Canvas2D
+// 默认走 WebGL，地址带 ?gl=0 就回到 Canvas2D
 var useGL = !/[?&]gl=0\b/.test(location.search);
 ```
 
-好处：
+这么做有几个好处：
 
-- **不需要重新部署就能回退** —— 出问题时用户/你自己加个参数就切回去了
-- 真机上可以直接对比（同一个页面、同一套数据）
-- 上线后先让一部分人用（对内测链接加 `?gl=1`，或反过来默认关）
+- 出问题不用重新部署，加个参数就切回去了
+- 真机上对比方便，同一个页面同一套数据
+- 可以只放给一部分人用（内测链接加 `?gl=1`，或者反过来默认关）
 
-确认没问题之后，再把默认值反转成「默认开、`?gl=0` 关」。
+确认没问题之后，再把默认值反过来。
 
-> 本项目作者就是这么做的：先默认 Canvas2D + `?gl=1` 试用，
-> 手机和平板真机验收通过后才改成默认开启，并保留 `?gl=0` 作为回退。
+> 这个库本身就是这么上线的：先默认 Canvas2D，用 `?gl=1` 试，
+> 手机和平板真机都过了才改成默认开，`?gl=0` 留着当回退。
 
 ---
 
-## 2. 数据准备
+## 2. 点云怎么准备
 
-`points` 是 `Float32Array`，格式 `[x0,y0, x1,y1, ...]`，单位 **CSS 像素**。
+`points` 是 `Float32Array`，格式 `[x0,y0, x1,y1, ...]`，单位是 CSS 像素。
 
-如果你的点云是从**一张立绘**采样来的，推荐流程：
+如果点云是从立绘采样来的，按下面这个顺序做：
 
-| 步骤 | 做法 | 为什么 |
+| 步骤 | 做法 | 原因 |
 |---|---|---|
-| 1 | 用**透明背景**的立绘，拿 **alpha 通道**当掩膜 | 白底立绘不能用颜色阈值去底 |
-| 2 | 若必须是白底：从**图像边缘 flood fill** 去底 | 直接用亮度阈值会把画面里的白色区域（眼罩、白衣服）一起删掉 |
-| 3 | 形态学**开/闭** + 取**最大连通域** | 去掉孤立噪点与细碎区域 |
-| 4 | **抖动网格**采样（`CELL ≈ 1.5~1.9 px`） | 纯随机采样会有疏密不匀的斑块 |
-| 5 | 把采样到的颜色归类到**语义调色板**（同一部位同一色槽） | 否则 JPEG 噪点会让画面变成彩色麻点 |
-| 6 | 坐标按包围盒归一化到 `0~255`，每点 4 字节 `(x, y, 色槽, 存在感)`，base64 存 | 体积小、解析快（本项目 43,991 点约 235 KB） |
+| 1 | 用透明背景的立绘，拿 alpha 通道当掩膜 | 白底立绘没法靠颜色阈值去底 |
+| 2 | 只有白底素材时，从图像边缘 flood fill 去底 | 直接卡亮度阈值，画面里的白色部分（眼罩、白衣服）会一起被删掉 |
+| 3 | 形态学开闭运算，再取最大连通域 | 去掉孤立噪点和细碎区域 |
+| 4 | 抖动网格采样，`CELL` 取 1.5 ~ 1.9 px | 纯随机采样会有疏密不匀的斑块 |
+| 5 | 把采样颜色归到少数几个语义色槽 | 不归的话，JPEG 噪点会让画面变成彩色麻点 |
+| 6 | 坐标按包围盒归一化到 0~255，每点 4 字节 `(x, y, 色槽, 存在感)`，base64 存 | 体积小、解析快，43,991 点大约 235 KB |
 
 ---
 
-## 3. 接到已有的动画循环里
+## 3. 接进已有的动画循环
 
 ```js
 import { createPointFigure } from './src/point-figure.js';
 
-// —— 初始化（一次）——
+// 初始化，只做一次
 const figure = createPointFigure({
   canvas: document.getElementById('figure'),
-  points: basePoints,          // 静态的基准位置
+  points: basePoints,          // 静态基准位置
   palette: PALETTE,
   radius: computedRadius,
   alpha: 0.34,
   dpr: Math.min(devicePixelRatio || 1, 2)
 });
 
-// 逐点颜色/透明度（从点阵的色槽与"存在感"算出来）
+// 逐点颜色和透明度，由色槽和"存在感"算出来
 figure.setPointColors(rgb255, alphaPerPoint);
 
 function layout() {
-  const r = wrap.getBoundingClientRect();
-  figure.resize(r.width, r.height);
+  // 用 offsetWidth / offsetHeight，理由见下面第 3.1 节
+  figure.resize(wrap.offsetWidth, wrap.offsetHeight);
 }
 layout();
 window.addEventListener('resize', debounce(layout, 160));
 
-// —— 每帧 ——
-const cur = new Float32Array(n * 2);     // 复用，别每帧 new
+// 每帧
+const cur = new Float32Array(n * 2);     // 复用这个数组，别每帧 new
 function frame() {
-  updatePositions(cur);                  // 你自己的物理/插值
-  figure.setTone(mix, globalAlpha);      // 可选：色调随进度变化
-  figure.render(cur);                    // 传入位置；不传则用静态 points
+  updatePositions(cur);                  // 你自己的物理或插值
+  figure.setTone(mix, globalAlpha);      // 可选，让色调随进度变化
+  figure.render(cur);                    // 不传则用初始化时的静态位置
 }
 ```
 
-### ⚠️ 两个必须注意的点
+### 3.1 canvas 尺寸用 `offsetWidth`，别用 `getBoundingClientRect()`
 
-**① canvas 尺寸必须用 `offsetWidth/offsetHeight`，不要用 `getBoundingClientRect()`**
-
-如果父级有 `transform: scale(.85)` 之类的进场动画，
-`getBoundingClientRect()` 返回的是**缩放后**的尺寸。把它写进 canvas 缓冲区，
-会导致**右侧约 15% 永远填不满**，而打开 DevTools 触发一次 resize 后又"自己好了" ——
-非常难查。
+父级如果有 `transform: scale(.85)` 之类的进场动画，`getBoundingClientRect()` 拿到的是
+缩放之后的尺寸。把这个值写进 canvas 缓冲区，右侧大约 15% 会永远填不满。麻烦的是打开
+DevTools 触发一次 resize，它又自己好了，很难往这个方向想。
 
 ```js
-// ✅ 布局尺寸，不受 transform 影响
+// 布局尺寸，不受 transform 影响
 const w = el.offsetWidth, h = el.offsetHeight;
-// ❌ 会被 scale 污染
-const r = el.getBoundingClientRect();
 ```
 
-**② 离屏时一定要停帧**
+### 3.2 离屏时必须停帧
 
-滚动事件里别无条件调 `start()`。如果 `IntersectionObserver` 已经把循环停了，
-`scroll` 处理器再把它唤醒，就会在**用户根本看不见的地方**持续烧掉 40ms/帧。
+滚动事件里不要无条件调 `start()`。`IntersectionObserver` 已经把循环停了，
+`scroll` 处理器又把它叫醒，用户看不见的地方就会一直按 40ms 一帧烧下去。
 
 ```js
 let heroVisible = false;
 io.observe(hero);                       // isIntersecting 时置位
 window.addEventListener('scroll', () => {
-  if (!heroVisible) return;             // ← 关键
+  if (!heroVisible) return;             // 这一行是关键
   computeTarget();
   start();
 }, { passive: true });
@@ -110,26 +105,26 @@ window.addEventListener('scroll', () => {
 
 ---
 
-## 4. 参数怎么调
+## 4. 参数取值
 
 | 参数 | 建议 | 说明 |
 |---|---|---|
-| `radius` | 1.5 ~ 3.0 px | 越小越细腻但越吃调用开销（点数不变时开销不变，是**观感**取舍） |
-| `alpha` | 0.25 ~ 0.5 | 密集处会自然饱和；本库会自动放大到饱和所需的值 |
-| `dpr` | `min(devicePixelRatio, 2)` | 超过 2 对这么小的点几乎没有画质收益，纯浪费填充率 |
-| `palette` | 4 ~ 10 色 | 语义分组，同一部位一个色槽 |
+| `radius` | 1.5 ~ 3.0 px | 越小越细腻。点数不变时开销也不变，所以纯粹是观感取舍 |
+| `alpha` | 0.25 ~ 0.5 | 密集处会自然饱和，库会自动放大到饱和需要的值 |
+| `dpr` | `min(devicePixelRatio, 2)` | 超过 2 对这种小点几乎没有画质收益，只是白耗填充率 |
+| `palette` | 4 ~ 10 色 | 按部位分组，一个部位一个色槽 |
 
-`k` 的拟合系数（`2.03` 与 `0.60`）是在 `radius/pitch ∈ [0.2, 0.75]` 上标定的。
-如果你的点云密度超出这个范围，建议按 [TECHNICAL.md §4](TECHNICAL.md) 重新标定一遍。
+`k` 的两个拟合系数（`2.03` 和 `0.60`）是在 `radius/pitch` 落在 0.2 到 0.75 之间标定的。
+点云密度超出这个范围的话，按 [TECHNICAL.md 第 4 节](TECHNICAL.md) 重新标一遍。
 
 ---
 
-## 5. 上线检查清单
+## 5. 上线前过一遍
 
-- [ ] 支持 WebGL2 的设备走 GL，不支持的自动回退 Canvas2D（已内置）
-- [ ] `?gl=0` 能立刻切回（不需要改代码/重新部署）
-- [ ] 移动端真机（至少一台手机 + 一台平板）实测滚动流畅度
-- [ ] 逐像素比对密集态与过渡态（用 `drawImage` 拷回 2D canvas 再读，别用 `readPixels`）
-- [ ] 页面隐藏 / 元素离屏时确实停帧（数一下 rAF 调用次数）
-- [ ] `resize` 后缓冲区与显示尺寸一致（`canvas.width === Math.round(cssW * dpr)`）
-- [ ] 备份当前版本，随时可整目录还原
+- [ ] 支持 WebGL2 的设备走 GL，不支持的自动退回 Canvas2D（库内置）
+- [ ] `?gl=0` 能立刻切回去，不需要改代码或重新部署
+- [ ] 至少一台手机加一台平板，真机测滚动流畅度
+- [ ] 密集态和过渡态都做过逐像素比对。读回用 `drawImage` 拷进 2D canvas，不要用 `readPixels`
+- [ ] 页面隐藏、元素离屏时确实停了帧，数一下 rAF 的调用次数
+- [ ] resize 之后缓冲区跟显示尺寸对得上：`canvas.width === Math.round(cssW * dpr)`
+- [ ] 当前版本有备份，能整目录还原
