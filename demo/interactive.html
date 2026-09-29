@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>百万粒子 · 实时交互 —— webgl-particles</title>
+<style>
+  :root { --dim:#8a8aa0; --fg:#e8e8f0; --accent:#6799fe; --line:#22223a; --ok:#6bdc9a; }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#04040a;color:var(--fg);
+    font:14px/1.6 -apple-system,"Segoe UI","Noto Sans SC",sans-serif;overflow:hidden}
+  canvas{display:block;position:fixed;inset:0;width:100%;height:100%}
+  .hud{position:fixed;left:16px;top:14px;z-index:2;pointer-events:none;max-width:60vw}
+  .hud h1{margin:0 0 3px;font-size:15px;font-weight:600;letter-spacing:.02em}
+  .hud p{margin:0;color:var(--dim);font-size:12px;line-height:1.5}
+  .hud .key{color:var(--accent);font-weight:600}
+  .probe{position:fixed;left:16px;bottom:16px;z-index:2;display:flex;gap:8px;flex-wrap:wrap}
+  .card{background:rgba(10,10,18,.78);border:1px solid var(--line);border-radius:9px;
+    padding:8px 12px;backdrop-filter:blur(8px);min-width:78px}
+  .card b{display:block;font-size:17px;font-variant-numeric:tabular-nums;font-weight:600;line-height:1.25}
+  .card span{color:var(--dim);font-size:11px}
+  .card.hi b{color:var(--ok)}
+  .ctrl{position:fixed;right:16px;top:14px;z-index:2;background:rgba(10,10,18,.78);
+    border:1px solid var(--line);border-radius:10px;padding:12px 14px;backdrop-filter:blur(8px);
+    display:flex;flex-direction:column;gap:9px;min-width:238px}
+  .ctrl label{color:var(--dim);font-size:12px;display:flex;justify-content:space-between;gap:8px}
+  .ctrl input[type=range]{width:100%;accent-color:var(--accent)}
+  .ctrl .v{color:var(--fg);font-variant-numeric:tabular-nums}
+  .hint{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:2;
+    color:var(--dim);font-size:13px;pointer-events:none;text-align:center}
+  .hint b{color:var(--accent)}
+  #err{position:fixed;left:16px;top:74px;z-index:3;color:#ff8f6b;font-size:12px;
+    white-space:pre-wrap;max-width:70vw}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div class="hud">
+  <h1>百万粒子 · 实时交互</h1>
+  <p><span class="key">移动鼠标</span>：粒子被直接吸引过去 —— 这是预渲染动画做不到的，所以它能证明画面是<b>实时演算</b>的。<br>
+     同时看左下角的 <span class="key">CPU 每帧</span>：无论粒子多少，它都接近 0（运动在 GPU 上算，CPU 每帧只写几个 uniform）。</p>
+</div>
+
+<div class="ctrl">
+  <label>粒子数 <span class="v" id="vN">300,000</span></label>
+  <input id="rN" type="range" min="50000" max="1500000" step="50000" value="300000" />
+  <label>跟随强度 <span class="v" id="vA">1.00</span></label>
+  <input id="rA" type="range" min="0" max="3" step="0.05" value="1" />
+  <label>扩散（让运动不呆板） <span class="v" id="vD">0.55</span></label>
+  <input id="rD" type="range" min="0" max="2" step="0.05" value="0.55" />
+  <label>点大小 <span class="v" id="vS">1.60</span></label>
+  <input id="rS" type="range" min="0.6" max="4" step="0.1" value="1.6" />
+</div>
+
+<div class="probe">
+  <div class="card"><b id="pFps">—</b><span>帧率</span></div>
+  <div class="card hi"><b id="pCpu">—</b><span>CPU 每帧</span></div>
+  <div class="card"><b id="pDraw">1</b><span>绘制调用/帧</span></div>
+  <div class="card"><b id="pN">—</b><span>粒子数</span></div>
+  <div class="card"><b id="pGpu">—</b><span>显卡</span></div>
+</div>
+
+<div class="hint">按住鼠标 / 手指拖动可以<b>抓住</b>整团粒子</div>
+<div id="err"></div>
+
+<script>
+(function () {
+'use strict';
+var errEl = document.getElementById('err');
+function err(s) { errEl.textContent += s + '\n'; }
+
+var cv = document.getElementById('stage');
+var CAPTURE = /[?&]capture=1/.test(location.search);
+var GL = cv.getContext('webgl2', {
+  alpha: false, premultipliedAlpha: false, antialias: false,
+  depth: false, stencil: false, preserveDrawingBuffer: CAPTURE,
+  powerPreference: 'high-performance'
+});
+if (!GL) { err('需要 WebGL2'); return; }
+
+var dbg = GL.getExtension('WEBGL_debug_renderer_info');
+document.getElementById('pGpu').textContent = dbg
+  ? (GL.getParameter(dbg.UNMASKED_RENDERER_WEBGL).match(/NVIDIA|AMD|Intel|Apple|Adreno|Mali|PowerVR/i) || ['?'])[0]
+  : '?';
+
+function sh(t, s, tag) {
+  var o = GL.createShader(t); GL.shaderSource(o, s); GL.compileShader(o);
+  if (!GL.getShaderParameter(o, GL.COMPILE_STATUS)) { err(tag + ': ' + GL.getShaderInfoLog(o)); return null; }
+  return o;
+}
+
+function qnum(k, d) { var m = new RegExp('[?&]' + k + '=([-\\d.]+)').exec(location.search); return m ? +m[1] : d; }
+
+/* ============================================================================
+   物理（在 GPU 上，transform feedback 做状态积分）
+
+   每帧 CPU 只写几个 uniform。粒子的所有运动都在着色器里算。
+
+   运动由两部分组成：
+     1) 【跟随】    粒子被鼠标吸引 —— 这是直接响应，观感上立刻能看出"活的"
+     2) 【无散度涡流】 让粒子不是简单地聚成一个点，而是围绕鼠标打转、散开
+   ========================================================================== */
+var SIM_VS = [
+  '#version 300 es',
+  'in vec2 a_pos; in vec2 a_vel; in vec2 a_seed;',
+  'uniform vec2 u_res; uniform float u_dt;',
+  'uniform vec2 u_mouse; uniform float u_attract; uniform float u_diff;',
+  'out vec2 v_pos; out vec2 v_vel;',
+  '',
+  'vec2 hash2(vec2 p) {',
+  '  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));',
+  '  return fract(sin(p) * 43758.5453) * 2.0 - 1.0;',
+  '}',
+  '',
+  'void main() {',
+  '  vec2 p = a_pos;',
+  '  vec2 v = a_vel;',
+  '',
+  // ---- 跟随：朝鼠标的弹簧力 ----
+  '  vec2 toM = u_mouse - p;',
+  '  float dm = length(toM) + 1e-4;',
+  '  vec2 dirM = toM / dm;',
+  // 近距离时减弱，避免所有粒子塌成一点（那样反而不好看，也看不出"跟随"）
+  '  float near = smoothstep(6.0, 90.0, dm);',
+  '  v += dirM * near * u_attract * 0.55;',
+  // 切向分量：让粒子绕着鼠标转，而不是直接撞上去
+  '  v += vec2(-dirM.y, dirM.x) * near * u_attract * 0.28;',
+  '',
+  // ---- 无散度涡流：让运动有结构、不呆板 ----
+  '  vec2 q = p * 0.0042;',
+  '  vec2 nn = hash2(floor(q) + floor(a_seed * 37.0));',
+  '  v += vec2(-nn.y, nn.x) * 0.10;',
+  '',
+  // ---- 扩散：随机扰动，避免"轨道感" ----
+  '  v += hash2(p * 0.017 + a_seed * 11.0) * u_diff * 0.45;',
+  '',
+  // ---- 阻尼 + 边界收束 ----
+  '  v *= 0.94;',
+  '  float vmag = length(v);',
+  '  if (vmag > 6.0) { v *= 6.0 / vmag; }',
+  '  vec2 c = u_res * 0.5;',
+  '  vec2 dc = p - c;',
+  '  float rc = length(dc) / max(length(u_res) * 0.5, 1.0);',
+  '  if (rc > 0.98) { v -= normalize(dc + 1e-6) * (rc - 0.98) * 6.0; }',
+  '',
+  '  p += v * min(u_dt * 60.0, 2.0);',
+  '  p = mod(p + u_res, u_res);',
+  '  v_pos = p; v_vel = v;',
+  '  gl_Position = vec4(0.0);',
+  '}'].join('\n');
+
+var SIM_FS = ['#version 300 es', 'precision lowp float;',
+  'out vec4 o; void main(){ o = vec4(0.0); }'].join('\n');
+
+/* 渲染：实例化四边形 + 亚像素覆盖率（本项目已验证的管线） */
+var DRAW_VS = ['#version 300 es',
+  'in vec2 a_corner; in vec2 a_pos; in vec3 a_col; in float a_al;',
+  'uniform vec2 u_res; uniform float u_rad;',
+  'out vec2 v_local; out float v_rad; out vec3 v_col; out float v_al;',
+  'void main() {',
+  '  vec2 p = (a_pos + a_corner * (u_rad + 0.5)) / u_res * 2.0 - 1.0;',
+  '  gl_Position = vec4(p.x, -p.y, 0.0, 1.0);',
+  '  v_local = a_corner * (u_rad + 0.5) / u_rad;',
+  '  v_rad = u_rad; v_col = a_col; v_al = a_al;',
+  '}'].join('\n');
+
+var DRAW_FS = ['#version 300 es', 'precision highp float;',
+  'in vec2 v_local; in float v_rad; in vec3 v_col; in float v_al;',
+  'uniform float u_dpr; out vec4 o;',
+  'void main() {',
+  '  float d = length(v_local) * v_rad;',
+  '  float aa = 0.5 / u_dpr;',
+  '  float cov = clamp((v_rad - d) / (2.0 * aa) + 0.5, 0.0, 1.0);',
+  '  if (cov <= 0.0) discard;',
+  '  o = vec4(v_col, cov * v_al);',
+  '}'].join('\n');
+
+var sv = sh(GL.VERTEX_SHADER, SIM_VS, 'sim VS'),
+    sf = sh(GL.FRAGMENT_SHADER, SIM_FS, 'sim FS'),
+    dv = sh(GL.VERTEX_SHADER, DRAW_VS, 'draw VS'),
+    df = sh(GL.FRAGMENT_SHADER, DRAW_FS, 'draw FS');
+if (!sv || !sf || !dv || !df) return;
+
+var SP = GL.createProgram();
+GL.attachShader(SP, sv); GL.attachShader(SP, sf);
+GL.transformFeedbackVaryings(SP, ['v_pos', 'v_vel'], GL.INTERLEAVED_ATTRIBS);
+GL.linkProgram(SP);
+if (!GL.getProgramParameter(SP, GL.LINK_STATUS)) { err('sim link: ' + GL.getProgramInfoLog(SP)); return; }
+
+var DP = GL.createProgram();
+GL.attachShader(DP, dv); GL.attachShader(DP, df); GL.linkProgram(DP);
+if (!GL.getProgramParameter(DP, GL.LINK_STATUS)) { err('draw link: ' + GL.getProgramInfoLog(DP)); return; }
+
+/* 四边形 */
+var QB = GL.createBuffer(); GL.bindBuffer(GL.ARRAY_BUFFER, QB);
+GL.bufferData(GL.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), GL.STATIC_DRAW);
+
+GL.enable(GL.BLEND);
+GL.blendFuncSeparate(GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA, GL.ONE, GL.ONE_MINUS_SRC_ALPHA);
+
+var L_SP = GL.getAttribLocation(SP, 'a_pos'), L_SV = GL.getAttribLocation(SP, 'a_vel'),
+    L_SS = GL.getAttribLocation(SP, 'a_seed');
+var U_SRES = GL.getUniformLocation(SP, 'u_res'), U_DT = GL.getUniformLocation(SP, 'u_dt'),
+    U_MOUSE = GL.getUniformLocation(SP, 'u_mouse'), U_AT = GL.getUniformLocation(SP, 'u_attract'),
+    U_DIFF = GL.getUniformLocation(SP, 'u_diff');
+var LC = GL.getAttribLocation(DP, 'a_corner'), L_DP = GL.getAttribLocation(DP, 'a_pos'),
+    L_DC = GL.getAttribLocation(DP, 'a_col'), L_DA = GL.getAttribLocation(DP, 'a_al');
+var U_RES = GL.getUniformLocation(DP, 'u_res'), U_RAD = GL.getUniformLocation(DP, 'u_rad'),
+    U_DPR = GL.getUniformLocation(DP, 'u_dpr');
+
+var N = Math.round(qnum('n', 300000));
+var ATTRACT = qnum('attract', 1.0);
+var DIFF = qnum('diff', 0.55);
+var DOT = qnum('dot', 1.6);
+var W = 1, H = 1, DPR = 1;
+var bufA = null, bufB = null, colBuf = null, alBuf = null, TF = null;
+var mouse = [0, 0], mouseOn = 0;
+
+/* 点大小随粒子数反向缩放：粒子少时点放大，视觉密度才一致。
+   （这是"调粒子数就散"的正确解法 —— 靠波长不够，必须动半径） */
+function dotFor(n) {
+  var base = Math.sqrt(300000 / Math.max(n, 5000));
+  return Math.max(0.7, Math.min(5.0, DOT * base));
+}
+
+function cappedDPR() {
+  var nat = window.devicePixelRatio || 1;
+  var cssArea = window.innerWidth * window.innerHeight;
+  if (cssArea * nat * nat > 2600000) return Math.max(1, Math.sqrt(2600000 / cssArea));
+  return nat;
+}
+
+function allocState(n) {
+  [bufA, bufB, colBuf, alBuf].forEach(function (b) { if (b) GL.deleteBuffer(b); });
+  if (TF) GL.deleteTransformFeedback(TF);
+  bufA = GL.createBuffer(); bufB = GL.createBuffer();
+  colBuf = GL.createBuffer(); alBuf = GL.createBuffer();
+  TF = GL.createTransformFeedback();
+
+  var st = new Float32Array(n * 4), col = new Float32Array(n * 3), al = new Float32Array(n);
+  var s = 20261108;
+  function rnd() { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }
+  var pal = [[0.62,0.72,1.0],[0.48,0.56,0.94],[0.82,0.88,1.0],[0.42,0.50,0.82],[0.96,0.86,0.60]];
+  // 初始就把粒子撒在鼠标附近的一圈里，这样一打开就能看到跟随
+  var cx = W * 0.5, cy = H * 0.5;
+  for (var i = 0; i < n; i++) {
+    var a = rnd() * 6.2831853, rr = Math.pow(rnd(), 0.45) * Math.min(W, H) * 0.47;
+    st[i*4]   = cx + Math.cos(a) * rr;
+    st[i*4+1] = cy + Math.sin(a) * rr;
+    st[i*4+2] = (rnd() - 0.5) * 0.6;
+    st[i*4+3] = (rnd() - 0.5) * 0.6;
+    var c = pal[(rnd()*pal.length)|0];
+    col[i*3] = c[0]; col[i*3+1] = c[1]; col[i*3+2] = c[2];
+    al[i] = 0.55 + rnd() * 0.45;
+  }
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+  GL.bufferData(GL.ARRAY_BUFFER, st, GL.DYNAMIC_COPY);
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufB);
+  GL.bufferData(GL.ARRAY_BUFFER, n * 16, GL.DYNAMIC_COPY);
+  GL.bindBuffer(GL.ARRAY_BUFFER, colBuf);
+  GL.bufferData(GL.ARRAY_BUFFER, col, GL.STATIC_DRAW);
+  GL.bindBuffer(GL.ARRAY_BUFFER, alBuf);
+  GL.bufferData(GL.ARRAY_BUFFER, al, GL.STATIC_DRAW);
+}
+
+function resize() {
+  DPR = cappedDPR();
+  W = Math.max(320, window.innerWidth);
+  H = Math.max(240, window.innerHeight);
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  GL.viewport(0, 0, cv.width, cv.height);
+}
+
+function frame(t, dt) {
+  // ---- 积分传递（读 A 写 B）----
+  GL.useProgram(SP);
+  GL.uniform2f(U_SRES, W, H);
+  GL.uniform1f(U_DT, Math.min(dt, 0.05));
+  GL.uniform2f(U_MOUSE, mouse[0], mouse[1]);
+  GL.uniform1f(U_AT, mouseOn ? ATTRACT : ATTRACT * 0.10);
+  GL.uniform1f(U_DIFF, DIFF);
+
+  GL.bindTransformFeedback(GL.TRANSFORM_FEEDBACK, TF);
+  GL.bindBufferBase(GL.TRANSFORM_FEEDBACK_BUFFER, 0, bufB);
+  GL.enable(GL.RASTERIZER_DISCARD);
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+  GL.enableVertexAttribArray(L_SP); GL.vertexAttribDivisor(L_SP, 0);
+  GL.vertexAttribPointer(L_SP, 2, GL.FLOAT, false, 16, 0);
+  GL.enableVertexAttribArray(L_SV); GL.vertexAttribDivisor(L_SV, 0);
+  GL.vertexAttribPointer(L_SV, 2, GL.FLOAT, false, 16, 8);
+  GL.enableVertexAttribArray(L_SS); GL.vertexAttribDivisor(L_SS, 1);
+  GL.vertexAttribPointer(L_SS, 2, GL.FLOAT, false, 16, 0);   // 复用 pos 当 seed（稳定即可）
+  GL.beginTransformFeedback(GL.POINTS);
+  GL.drawArrays(GL.POINTS, 0, N);
+  GL.endTransformFeedback();
+  GL.disable(GL.RASTERIZER_DISCARD);
+  GL.bindBufferBase(GL.TRANSFORM_FEEDBACK_BUFFER, 0, null);
+  GL.bindTransformFeedback(GL.TRANSFORM_FEEDBACK, null);
+  var tmp = bufA; bufA = bufB; bufB = tmp;
+
+  // ---- 绘制（每次完整重设属性状态）----
+  GL.useProgram(DP);
+  GL.bindBuffer(GL.ARRAY_BUFFER, QB);
+  GL.enableVertexAttribArray(LC); GL.vertexAttribDivisor(LC, 0);
+  GL.vertexAttribPointer(LC, 2, GL.FLOAT, false, 0, 0);
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+  GL.enableVertexAttribArray(L_DP); GL.vertexAttribDivisor(L_DP, 1);
+  GL.vertexAttribPointer(L_DP, 2, GL.FLOAT, false, 16, 0);
+  GL.bindBuffer(GL.ARRAY_BUFFER, colBuf);
+  GL.enableVertexAttribArray(L_DC); GL.vertexAttribDivisor(L_DC, 1);
+  GL.vertexAttribPointer(L_DC, 3, GL.FLOAT, false, 0, 0);
+  GL.bindBuffer(GL.ARRAY_BUFFER, alBuf);
+  GL.enableVertexAttribArray(L_DA); GL.vertexAttribDivisor(L_DA, 1);
+  GL.vertexAttribPointer(L_DA, 1, GL.FLOAT, false, 0, 0);
+  GL.uniform2f(U_RES, W, H);
+  GL.uniform1f(U_RAD, dotFor(N) * DPR);
+  GL.uniform1f(U_DPR, DPR);
+  GL.clearColor(0.016, 0.016, 0.039, 1);
+  GL.clear(GL.COLOR_BUFFER_BIT);
+  GL.drawArraysInstanced(GL.TRIANGLE_STRIP, 0, 4, N);
+}
+
+/* ---------------- 主循环 ---------------- */
+var last = performance.now(), t0 = last, frames = 0, accCpu = 0;
+var pFps = document.getElementById('pFps'), pCpu = document.getElementById('pCpu'), pN = document.getElementById('pN');
+function loop(now) {
+  requestAnimationFrame(loop);
+  var dt = (now - last) / 1000; last = now;
+  if (dt > 0.25) dt = 0.016;
+  var t = (now - t0) / 1000;
+  var c0 = performance.now();
+  frame(t, dt);
+  accCpu += performance.now() - c0;
+  frames++;
+  if (frames >= 30) {
+    pFps.textContent = (1000 / ((now - t0) / frames)).toFixed(0);
+    pCpu.textContent = (accCpu / frames).toFixed(1) + ' ms';
+    pN.textContent = N.toLocaleString();
+    frames = 0; accCpu = 0; t0 = now;
+  }
+}
+
+/* ---------------- 交互 ---------------- */
+function setMouse(x, y) { mouse[0] = x * DPR; mouse[1] = y * DPR; mouseOn = 1;
+  window.__dbgMouse = { x: x, y: y, dev: [mouse[0], mouse[1]], on: mouseOn, dpr: DPR }; }
+window.addEventListener('mousemove', function (e) { setMouse(e.clientX, e.clientY); });
+window.addEventListener('mouseleave', function () { mouseOn = 0; });
+window.addEventListener('mousedown', function (e) { setMouse(e.clientX, e.clientY); });
+window.addEventListener('touchstart', function (e) {
+  var t = e.touches[0]; if (t) setMouse(t.clientX, t.clientY);
+}, { passive: true });
+window.addEventListener('touchmove', function (e) {
+  var t = e.touches[0]; if (t) setMouse(t.clientX, t.clientY);
+}, { passive: true });
+window.addEventListener('touchend', function () { mouseOn = 0; });
+
+window.addEventListener('resize', function () {
+  var ow = W, oh = H;
+  resize();
+  if (ow !== W || oh !== H) allocState(N);
+});
+
+var rN = document.getElementById('rN'), rA = document.getElementById('rA'),
+    rD = document.getElementById('rD'), rS = document.getElementById('rS');
+var vN = document.getElementById('vN'), vA = document.getElementById('vA'),
+    vD = document.getElementById('vD'), vS = document.getElementById('vS');
+rN.value = Math.max(50000, Math.min(1500000, N));
+vN.textContent = N.toLocaleString();
+var tmr = 0;
+rN.oninput = function () {
+  vN.textContent = (+rN.value).toLocaleString();
+  clearTimeout(tmr);
+  tmr = setTimeout(function () { N = +rN.value; allocState(N); }, 350);
+};
+rA.oninput = function () { ATTRACT = +rA.value; vA.textContent = ATTRACT.toFixed(2); };
+rD.oninput = function () { DIFF = +rD.value; vD.textContent = DIFF.toFixed(2); };
+rS.oninput = function () { DOT = +rS.value; vS.textContent = DOT.toFixed(2); };
+
+/* ---------------- 起动 ---------------- */
+resize();
+mouse[0] = W * DPR * 0.5; mouse[1] = H * DPR * 0.5;
+mouseOn = 0;
+allocState(N);
+requestAnimationFrame(loop);
+window.__ready = true;
+window.__probe = function(){
+  var buf = new Float32Array(N * 4);
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+  GL.getBufferSubData(GL.ARRAY_BUFFER, 0, buf);
+  var minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,vmax=0,vsum=0,nan=0;
+  for (var i=0;i<N;i++){
+    var x=buf[i*4], y=buf[i*4+1], vx=buf[i*4+2], vy=buf[i*4+3];
+    if(!isFinite(x)||!isFinite(y)){nan++;continue;}
+    if(x<minx)minx=x; if(x>maxx)maxx=x;
+    if(y<miny)miny=y; if(y>maxy)maxy=y;
+    var vv=Math.hypot(vx,vy); if(vv>vmax)vmax=vv; vsum+=vv;
+  }
+  return JSON.stringify({N:N, x:[+minx.toFixed(1),+maxx.toFixed(1)], y:[+miny.toFixed(1),+maxy.toFixed(1)],
+    vmax:+vmax.toFixed(2), vavg:+(vsum/N).toFixed(3), nan:nan,
+    mouse:[+mouse[0].toFixed(1),+mouse[1].toFixed(1)], on:mouseOn,
+    ATTRACT:ATTRACT, DIFF:DIFF, W:W, H:H, RAD:+dotFor(N).toFixed(2)});
+};
+})();
+</script>
+</body>
+</html>
