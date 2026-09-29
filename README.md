@@ -1,68 +1,66 @@
 <div align="center">
   <img src="assets/logo.svg" width="132" alt="webgl-particles" />
   <h1>webgl-particles</h1>
-  <p><b>A WebGL2 particle renderer that composites like Canvas2D.</b><br>
-     Points blend into each other instead of staying isolated — so a 100,000-point
-     figure holds 60fps on mobile, at Canvas2D visual quality.</p>
+  <p><b>一个合成方式对齐 Canvas2D 的 WebGL2 粒子渲染器。</b><br>
+     点与点之间会像 Canvas2D 那样相互叠加、融合，而不是各自独立。<br>
+     十万级点云在手机上能跑满 60fps，观感与 Canvas2D 基本一致。</p>
 </div>
 
 <div align="center">
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![WebGL2](https://img.shields.io/badge/WebGL-2.0-990000.svg)](https://www.khronos.org/webgl/)
-[![Zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#install)
-[![No build step](https://img.shields.io/badge/build-none-brightgreen.svg)](#install)
-[![Demo](https://img.shields.io/badge/Demo-live-blue.svg)](https://xiaozhi-6.github.io/webgl-particles/demo/)
+[![Zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#安装)
+[![No build step](https://img.shields.io/badge/build-none-brightgreen.svg)](#安装)
+[![Demo](https://img.shields.io/badge/Demo-在线试-blue.svg)](https://xiaozhi-6.github.io/webgl-particles/demo/)
 
-**[中文](README.md) · [English](README_EN.md) · [Technical notes](docs/TECHNICAL.md) · [Integration](docs/INTEGRATION.md)**
+**中文 · [English](README_EN.md) · [技术细节](docs/TECHNICAL.md) · [接入指南](docs/INTEGRATION.md)**
 
 </div>
 
 ---
 
-## The problem
+## 起因
 
-Drawing a silhouette built from tens of thousands of **independent translucent points** is the
-standard way to get a soft, pointillist figure on the web. With Canvas2D it looks right, and on
-desktop it runs fine — but on a phone it collapses to **~18fps**.
+用几万个半透明小点拼出一个人物剪影，是网页上做柔和点阵图形的常见做法。Canvas2D 画出来的
+效果是对的，在电脑上也够流畅，但换到手机上就只剩 **18fps 左右**。
 
-The usual remedies don't work. Measured on a real 43,991-point figure:
+常见的几种优化路子都试过，对一个真实的 43,991 点案例来说都没用：
 
-| Remedy | Result |
+| 尝试 | 结果 |
 |---|---|
-| Shrink the backing store to 2.1 Mpx (−62%) | render time **unchanged** |
-| Batch everything into one `Path2D` fill | 2.8× faster, but **speckle artifacts where points overlap** |
-| Pre-rendered sprite via `drawImage` | **slower** (116 ms/frame) |
-| **Instanced quads in WebGL2** | **47× faster** |
+| 把画布缓冲区压到 2.1 Mpx（减 62%） | 耗时**没有变化** |
+| 合并成一个 `Path2D` 批量填充 | 快了 2.8 倍，但**点重叠的地方出现颗粒噪点** |
+| 预渲染精灵图，用 `drawImage` 贴 | **更慢**（116 ms/帧） |
+| **WebGL2 实例化四边形** | **快 47 倍** |
 
-The cost was never fill rate. It's the fixed per-call overhead of 43,991
-`beginPath` + `arc` + `fill` calls — about **1.08 µs per point**. The math behind the motion
-accounts for 1.6% of the frame.
+慢的地方从来不是填充率，而是 43,991 次 `beginPath` + `arc` + `fill` 的固定调用开销，
+平均每个点 **1.08 µs**。真正做运动计算的数学部分只占一帧的 1.6%。
 
-## Results
+## 实测结果
 
-43,991 points, figure-layer rAF interval while scrolling:
+43,991 个点，滚动时测量人物所在层的 rAF 帧间隔：
 
-| Device | Canvas2D | **webgl-particles** |
+| 设备 | Canvas2D | **webgl-particles** |
 |---|---|---|
-| Tablet · 1024×1366 · dpr 2 | 57.0 ms (≈18fps) | **16.9 ms (60fps)** |
-| Phone · 412×915 · dpr 3 | 53.5 ms (≈19fps) | **16.6 ms (60fps)** |
-| Desktop · 1440×900 · dpr 1 | 60fps | 60fps |
+| 平板 · 1024×1366 · dpr 2 | 57.0 ms（约 18fps） | **16.9 ms（60fps）** |
+| 手机 · 412×915 · dpr 3 | 53.5 ms（约 19fps） | **16.6 ms（60fps）** |
+| 桌面 · 1440×900 · dpr 1 | 60fps | 60fps |
 
-Image fidelity, per-pixel against the Canvas2D reference:
+与 Canvas2D 参考实现逐像素比对：
 
-| State | Luminance ratio | Mean abs. diff | Pixels off by >40 |
+| 状态 | 亮度比 | 逐像素平均差 | 差异超过 40 的像素 |
 |---|---|---|---|
-| Dense / gathered | **0.9991** | **1.12 / 255** | **0.28%** |
-| In transition | 1.08 – 1.23 | 68 – 75 | 59% – 71% |
+| 密集/聚合 | **0.9991** | **1.12 / 255** | **0.28%** |
+| 过渡中 | 1.08 ~ 1.23 | 68 ~ 75 | 59% ~ 71% |
 
-Static views are effectively identical. During rapid scatter transitions the WebGL path reads
-8–23% brighter on average; on device the difference is subtle. See
-[Known limitations](#known-limitations) and [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
+静止画面的差异肉眼看不出来。快速散开的过渡阶段，WebGL 侧平均偏亮 8~23%，在真机上要刻意
+对比才看得出来。原因与可行的解法写在[已知问题](#已知问题)和
+[`docs/TECHNICAL.md`](docs/TECHNICAL.md) 里。
 
-## Install
+## 安装
 
-Zero dependencies, no build step. Copy one file:
+没有依赖，也不需要构建，拷一个文件就能用：
 
 ```html
 <canvas id="figure"></canvas>
@@ -71,144 +69,138 @@ import { createPointFigure } from './src/point-figure.js';
 
 const figure = createPointFigure({
   canvas: document.getElementById('figure'),
-  points: new Float32Array([/* x0, y0, x1, y1, ... */]),  // CSS pixels
+  points: new Float32Array([/* x0, y0, x1, y1, ... */]),  // 单位为 CSS 像素
   palette: ['#463c5e', '#6b5f90', '#9c92c4', '#c8e8ff'],
-  radius: 2.0,   // per-point radius, CSS px
-  alpha: 0.34,   // per-point base opacity
+  radius: 2.0,   // 每个点的半径，CSS 像素
+  alpha: 0.34,   // 每个点的基础不透明度
   dpr: 2
 });
 
 figure.resize(1200, 800);
-figure.setPointColors(rgb, alphaPerPoint);   // optional per-point color
+figure.setPointColors(rgb, alphaPerPoint);   // 可选，逐点指定颜色
 figure.render();
 </script>
 ```
 
-Browsers without WebGL2 fall back to Canvas2D automatically. Nothing to configure.
+浏览器不支持 WebGL2 时会自动退回 Canvas2D，不需要额外处理。
 
-## How it works
+## 实现思路
 
-### 1. Instanced quads, not `gl_PointSize`
+### 1. 用实例化四边形，不用 `gl_PointSize`
 
-`gl_PointSize` is the obvious choice and the wrong one: implementations **round it to whole
-device pixels**. At a 1.32 px radius the 5.29 px diameter snaps to 5 or 6, visibly inflating
-small points.
+`gl_PointSize` 看起来最省事，但实现会把它**舍入到整数设备像素**。半径 1.32 px 的点，
+直径 5.29 会被舍成 5 或 6，小点被明显放大。
 
-Instead each point instantiates a quad, and the circle is carved out in the fragment shader
-with a half-device-pixel antialiasing band — sub-pixel accurate at any radius.
+改成每个点实例化一个四边形，圆在片元着色器里按到中心的距离裁出来，边缘用半个设备像素的
+过渡带做抗锯齿，这样在任何半径下都能做到亚像素精度。
 
 ```glsl
-float dist = length(v_local) * v_rad;      // distance to center, CSS px
-float aa   = 0.5 / u_dpr;                  // half a device pixel
+float dist = length(v_local) * v_rad;      // 到圆心的距离，CSS 像素
+float aa   = 0.5 / u_dpr;                  // 半个设备像素
 float cov  = clamp((v_rad - dist) / (2.0 * aa) + 0.5, 0.0, 1.0);
 if (cov <= 0.0) discard;
 outColor = vec4(v_col, cov * v_al);
 ```
 
-Everything renders in one `drawArraysInstanced(TRIANGLE_STRIP, 0, 4, N)`.
+所有点由一次 `drawArraysInstanced(TRIANGLE_STRIP, 0, 4, N)` 画完。
 
-### 2. Canvas2D-compatible compositing
+### 2. 混合方式对齐 Canvas2D
 
 ```js
 gl.enable(gl.BLEND);
 gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 ```
 
-### 3. Matching Canvas2D's alpha saturation
+### 3. 处理 alpha 饱和差异
 
-This is the part that makes the visual parity possible.
+观感能对上，关键在这一步。
 
-In a fully covered dense patch with dot color `rgb(120,110,180)`:
+在一块被完全覆盖的密集区域里，点的颜色取 `rgb(120,110,180)`，实测结果是：
 
-| Per-point alpha | Canvas2D | WebGL | Ratio |
+| 每点 alpha | Canvas2D | WebGL | 比值 |
 |---|---|---|---|
 | 0.10 | 117.4 | 37.6 | 0.32 |
 | 0.20 | 119.8 | 64.4 | 0.54 |
-| **0.34** | **120.0 — saturated** | 92.2 | 0.77 |
+| **0.34** | **120.0（已饱和）** | 92.2 | 0.77 |
 | 1.00 | 120.0 | 120.0 | 1.00 |
 
-Canvas2D issues 44,000 independent source-over composites, so dense regions **saturate at
-alpha ≈ 0.34**. WebGL accumulates per-fragment and needs ≈ 1.0 to reach the same color.
-Naively porting the code therefore yields a darker, grid-like image — this is the single
-cause of the visual mismatch.
+Canvas2D 每次 `fill()` 都是一次独立的源覆盖合成，4.4 万次叠加之后，密集区域在
+alpha ≈ 0.34 就已经被推到满色。WebGL 是逐片元累加的，要 alpha ≈ 1.0 才到同样的颜色。
 
-### 4. Density-adaptive alpha correction
+所以直接把代码搬到 WebGL，画面会偏暗、还能看出网格感。这就是画面对不上的全部原因。
 
-Calibrated by binary-searching the alpha at which WebGL converges to Canvas2D's color:
+### 4. 按密度修正 alpha
 
-| radius / local pitch | Required multiplier |
+用二分反解出「WebGL 需要多少 alpha 才能得到 Canvas2D 的收敛色」：
+
+| 半径 / 局部点间距 | 需要的倍数 |
 |---|---|
-| 0.20 (sparse) | ×1.897 |
+| 0.20（稀疏） | ×1.897 |
 | 0.50 | ×1.840 |
-| 0.75 (dense) | ×1.584 |
+| 0.75（密集） | ×1.584 |
 
-Overlap drives the multiplier, fitted as:
+倍数由重叠程度决定，拟合出来是：
 
 ```js
-k = 2.03 - 0.60 * (radius / localPitch)     // measured range ×1.58 – ×1.90
+k = 2.03 - 0.60 * (radius / localPitch)     // 实测范围 ×1.58 ~ ×1.90
 alpha = min(1, baseAlpha * k)
 ```
 
-`localPitch` is a **static per-point property**, computed once at initialization with a spatial
-grid — **zero runtime cost**. Applying it drops the dense-state per-pixel difference from 253
-to **1.12**. No point is added, removed, resized or recolored.
+`localPitch` 是每个点的静态属性，初始化时用空间网格数一次邻点就算好了，**运行时没有额外开销**。
+加上这一步之后，密集状态的逐像素差异从 253 降到 **1.12**。点的数量、位置、大小、颜色都没有改动。
 
-## Demo
+## 演示
 
-**Live:** https://xiaozhi-6.github.io/webgl-particles/demo/
+**在线试：** https://xiaozhi-6.github.io/webgl-particles/demo/
 
-Locally:
+本地跑：
 
 ```bash
 python -m http.server 8080
-# open http://127.0.0.1:8080/demo/
+# 打开 http://127.0.0.1:8080/demo/
 ```
 
-The demo synthesizes its own point cloud from geometry — **the repository contains no image
-assets**. Switch backends and adjust radius / DPR live to see the cost difference.
+演示页的点云是用几何图形现场生成的，**仓库里不含任何图片素材**。页面上可以随时切换后端、
+拖动半径和设备像素比，直接看耗时差别。
 
-| Backend | Frame time | FPS |
+| 后端 | 单帧 | 帧率 |
 |---|---|---|
 | WebGL2 | **0.70 ms** | **60** |
 | Canvas2D | 32.80 ms | 29 |
 
-## Layout
+## 目录结构
 
 ```
 webgl-particles/
 ├── src/
-│   ├── point-figure.js        WebGL2 implementation
-│   └── canvas2d-figure.js     Canvas2D reference (fidelity baseline & fallback)
+│   ├── point-figure.js        WebGL2 实现
+│   └── canvas2d-figure.js     Canvas2D 参考实现（观感基准，同时作为回退）
 ├── demo/
-│   ├── index.html             Self-contained demo
-│   └── points.js              Synthetic point cloud
+│   ├── index.html             自包含演示页
+│   └── points.js              合成点云
 ├── docs/
-│   ├── TECHNICAL.md           All measurements, calibration data, pitfalls
-│   └── INTEGRATION.md         Adopting this safely, with a feature flag
+│   ├── TECHNICAL.md           全部实测数据、标定表、踩过的坑
+│   └── INTEGRATION.md         怎么安全地接进已有项目
 ├── assets/logo.svg
 ├── CONTRIBUTING.md
 ├── CODE_OF_CONDUCT.md
 └── LICENSE
 ```
 
-## Known limitations
+## 已知问题
 
-1. **Transition states read 8–23% brighter.** Static/dense views are nearly pixel-identical, but
-   when the cloud rapidly disperses a deviation appears. Likely cause: the local density estimate
-   is less accurate for randomly distributed points than for the regular grid used during
-   calibration. Finer density buckets should close most of the gap.
-2. **The `k` fit is empirical.** It degrades outside `radius/pitch ∈ [0.2, 0.75]` and is clamped
-   there.
-3. **Tested on Chrome / Edge / Safari WebGL2.** Older devices rely on the Canvas2D fallback.
+1. **过渡状态偏亮 8~23%。** 静止和密集画面基本逐像素一致，但点云快速散开时会出现偏差。
+   猜测是散开态的局部密度估得不够准：随机分布的间距比标定用的规则网格更不均匀。
+   把密度分档做细一些应该能补上大部分。
+2. **`k` 的线性拟合是经验值。** 在 `radius/pitch` 落在 0.2 到 0.75 之外会失准，代码里做了上下限钳制。
+3. **只在 Chrome / Edge / Safari 的 WebGL2 上验证过。** 老设备依赖 Canvas2D 回退。
 
-## Credits
+## 致谢
 
-- The compositing-saturation insight and its calibration approach were developed for a personal
-  site; the technique is extracted here as a standalone library.
-- Inspiration for high-performance canvas work comes from the studio sites of
-  **miHoYo** (idle-time scheduling, visibility gating) and **Hypergryph**
-  (pure `vw` proportional scaling, blend-mode-driven visuals).
+- 关于合成饱和的那点发现和整套标定方法，是给个人网站做优化时摸索出来的，这里抽成独立库。
+- 高性能画布方面参考过**米哈游**（空闲时段调度、可见性停帧）和**鹰角**（纯 `vw` 等比缩放、
+  靠混合模式出效果）官网的做法。
 
-## License
+## 许可
 
 [MIT](LICENSE)
