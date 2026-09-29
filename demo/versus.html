@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>webgl-particles — 并排对比</title>
+<style>
+  :root { --bg:#0a0a0a; --fg:#e8e8f0; --dim:#8a8aa0; --accent:#6799fe;
+          --card:#12121a; --line:#23233a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.6 -apple-system,"Segoe UI","Noto Sans SC",sans-serif; }
+  .wrap { max-width:1180px; margin:0 auto; padding:20px 16px 56px; }
+  h1 { font-size:20px; margin:0 0 3px; }
+  .sub { color:var(--dim); margin:0 0 16px; font-size:13px; }
+
+  .pair { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:820px) { .pair { grid-template-columns:1fr; } }
+
+  .side { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          overflow:hidden; }
+  .side.win { border-color:var(--accent); box-shadow:0 0 0 1px rgba(103,153,254,.35) inset; }
+
+  .head { display:flex; align-items:baseline; gap:10px; padding:10px 13px; }
+  .head b { font-size:14px; }
+  .head .tag { font-size:11px; color:var(--dim); }
+  .head .ms { margin-left:auto; font-variant-numeric:tabular-nums;
+              font-size:15px; font-weight:600; }
+  .head .ms.bad { color:#ff8f6b; }
+  .head .ms.good { color:#6bdc9a; }
+
+  canvas { display:block; width:100%; background:#0d0d14; }
+
+  .bar { height:4px; background:#1b1b2a; }
+  .bar > i { display:block; height:100%; background:var(--accent); width:0%; }
+
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
+           padding:13px 15px; margin-top:14px; }
+  .panel p { margin:0; color:var(--dim); font-size:13px; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  label { color:var(--dim); font-size:13px; }
+  input[type=range] { width:150px; vertical-align:middle; }
+  .big { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+         gap:9px; margin-top:14px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:9px;
+          padding:9px 12px; }
+  .stat b { display:block; font-size:19px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .stat span { color:var(--dim); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>同一套点云，同一帧，两个后端</h1>
+  <p class="sub">左边 Canvas2D 逐点 <code>arc+fill</code>，右边 WebGL2 实例化四边形。
+     两边共用同一份坐标数据与同一个动画相位，每帧分别计时。</p>
+
+  <div class="pair">
+    <div class="side" id="sideC2">
+      <div class="head">
+        <b>Canvas2D</b><span class="tag">arc + fill</span>
+        <span class="ms" id="msC2">—</span>
+      </div>
+      <canvas id="cvC2"></canvas>
+      <div class="bar"><i id="barC2"></i></div>
+    </div>
+    <div class="side" id="sideGL">
+      <div class="head">
+        <b>WebGL2</b><span class="tag">instanced quads</span>
+        <span class="ms" id="msGL">—</span>
+      </div>
+      <canvas id="cvGL"></canvas>
+      <div class="bar"><i id="barGL"></i></div>
+    </div>
+  </div>
+
+  <div class="big">
+    <div class="stat"><b id="sN">—</b><span>点数</span></div>
+    <div class="stat"><b id="sC2">—</b><span>Canvas2D 平均每帧</span></div>
+    <div class="stat"><b id="sGL">—</b><span>WebGL2 平均每帧</span></div>
+    <div class="stat"><b id="sX">—</b><span>倍数</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label>半径 <input id="rad" type="range" min="0.8" max="3" step="0.05" value="1.5" /> <b id="radV">1.50</b> px</label>
+      <label>设备像素比 <input id="dpr" type="range" min="1" max="3" step="0.5" value="2" /> <b id="dprV">2</b></label>
+    </div>
+    <p style="margin-top:10px">
+      两边各自计时，所以这个对比不抢 CPU。注意 <b>WebGL 那一侧每帧通常不到 0.2 ms</b>，
+      而 Canvas2D 是几十毫秒 —— 差的就是 43,991 次 <code>beginPath</code> + <code>arc</code> + <code>fill</code> 的固定开销。
+      <br />真机上差别更明显：桌面显卡足够快，Canvas2D 也能撑住；手机上它会掉到 18fps 左右。
+    </p>
+  </div>
+</div>
+
+<script type="module">
+import { createPointFigure } from '../src/point-figure.js';
+import { makePoints, PALETTE } from './points.js';
+
+const cvC2 = document.getElementById('cvC2');
+const cvGL = document.getElementById('cvGL');
+
+let W = 0, H = 0;
+let data = null, figC2 = null, figGL = null;
+let radius = 1.5, dprVal = 2;
+
+/* ---------- 尺寸 ---------- */
+function sideSize() {
+  const grid = document.querySelector('.pair');
+  const colW = grid.getBoundingClientRect().width;
+  const twoCol = window.matchMedia('(min-width:821px)').matches;
+  const w = Math.max(240, Math.round(twoCol ? (colW - 12) / 2 : colW));
+  const h = Math.max(260, Math.min(Math.round(window.innerHeight * 0.56), 520));
+  return [w, h];
+}
+
+/* ---------- Canvas2D 参照版（逐点 arc+fill，不做任何 alpha 修正） ---------- */
+function makeC2(canvas, points, rgb, alpha) {
+  const ctx = canvas.getContext('2d');
+  const N = points.length / 2;
+  let cssW = 0, cssH = 0;
+  return {
+    resize(w, h) {
+      cssW = w; cssH = h;
+      canvas.width = Math.round(w * dprVal);
+      canvas.height = Math.round(h * dprVal);
+      // 必须同时设 CSS 宽高：CSS 里写了 width:100%，会横向拉伸画面
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      ctx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
+    },
+    render(xy) {
+      const P = xy || points;
+      ctx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      ctx.globalCompositeOperation = 'source-over';
+      for (let i = 0; i < N; i++) {
+        ctx.beginPath();
+        ctx.arc(P[i * 2], P[i * 2 + 1], radius, 0, 6.2832);
+        ctx.fillStyle = 'rgba(' + rgb[i * 3] + ',' + rgb[i * 3 + 1] + ',' +
+          rgb[i * 3 + 2] + ',' + alpha[i].toFixed(3) + ')';
+        ctx.fill();
+      }
+    },
+    count: N
+  };
+}
+
+/* ---------- 构建 ---------- */
+function build() {
+  const [w, h] = sideSize();
+  W = w; H = h;
+  data = makePoints(w, h);
+  document.getElementById('sN').textContent = data.count.toLocaleString();
+
+  if (figC2 && figC2.destroy) figC2.destroy();
+  if (figGL && figGL.destroy) figGL.destroy();
+
+  figC2 = makeC2(cvC2, data.xy, data.rgb, data.alpha);
+  figC2.resize(w, h);
+
+  figGL = createPointFigure({
+    canvas: cvGL, points: data.xy, palette: PALETTE,
+    radius: radius, alpha: 1, dpr: dprVal
+  });
+  if (figGL.isWebGL && figGL.setPointColors) {
+    figGL.setPointColors(data.rgb, data.alpha);
+  }
+  figGL.resize(w, h);
+}
+
+/* ---------- 主循环：两边同帧、各自计时 ---------- */
+let running = false, rafId = 0, lastT = 0, ticks = 0;
+let accC2 = 0, accGL = 0;
+const MAXMS = 60;          // 进度条参考上限
+let scratch = null;
+
+function loop(t) {
+  if (!running) return;
+  rafId = requestAnimationFrame(loop);
+  lastT = t;
+
+  // 同帧呼吸
+  const breathe = 1 + 0.035 * Math.sin(t / 640);
+  if (!scratch || scratch.length !== data.xy.length) scratch = new Float32Array(data.xy.length);
+  for (let i = 0; i < data.xy.length; i += 2) {
+    const dx = data.xy[i] - W / 2, dy = data.xy[i + 1] - H / 2;
+    scratch[i] = W / 2 + dx * breathe;
+    scratch[i + 1] = H / 2 + dy * breathe;
+  }
+
+  let t0 = performance.now();
+  figC2.render(scratch);
+  const c2 = performance.now() - t0;
+
+  t0 = performance.now();
+  figGL.render(scratch);
+  const gl = performance.now() - t0;
+
+  accC2 += c2; accGL += gl; ticks++;
+
+  document.getElementById('msC2').textContent = c2.toFixed(2) + ' ms';
+  document.getElementById('msGL').textContent = gl.toFixed(2) + ' ms';
+  document.getElementById('barC2').style.width = Math.min(100, c2 / MAXMS * 100) + '%';
+  document.getElementById('barGL').style.width = Math.min(100, gl / MAXMS * 100) + '%';
+
+  const sideC2 = document.getElementById('sideC2');
+  const sideGL = document.getElementById('sideGL');
+  document.getElementById('msC2').className = 'ms ' + (c2 > 16.7 ? 'bad' : 'good');
+  document.getElementById('msGL').className = 'ms ' + (gl > 16.7 ? 'bad' : 'good');
+  sideGL.classList.toggle('win', gl < c2);
+  sideC2.classList.toggle('win', c2 < gl);
+
+  if (ticks >= 40) {
+    const aC2 = accC2 / ticks, aGL = accGL / ticks;
+    document.getElementById('sC2').textContent = aC2.toFixed(2) + ' ms';
+    document.getElementById('sGL').textContent = aGL.toFixed(2) + ' ms';
+    document.getElementById('sX').textContent =
+      aGL > 0.0001 ? (aC2 / aGL).toFixed(0) + '×' : '—';
+  }
+}
+
+function start() { if (running) return; running = true; rafId = requestAnimationFrame(loop); }
+function stop() { running = false; if (rafId) cancelAnimationFrame(rafId); rafId = 0; }
+
+/* ---------- 控件 ---------- */
+const radEl = document.getElementById('rad'), dprEl = document.getElementById('dpr');
+radEl.oninput = () => {
+  radius = +radEl.value;
+  document.getElementById('radV').textContent = radius.toFixed(2);
+  build(); if (!running) { figC2.render(); figGL.render(); }
+};
+dprEl.oninput = () => {
+  dprVal = +dprEl.value;
+  document.getElementById('dprV').textContent = dprVal;
+  build(); if (!running) { figC2.render(); figGL.render(); }
+};
+
+let rt = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(rt);
+  rt = setTimeout(() => {
+    const [w, h] = sideSize();
+    if (w === W && h === H) return;
+    build(); if (!running) { figC2.render(); figGL.render(); }
+  }, 180);
+});
+
+/* ---------- 起 ---------- */
+build();
+figC2.render();
+figGL.render();
+
+const io = new IntersectionObserver((es) => {
+  es.forEach(e => { if (e.isIntersecting) start(); else stop(); });
+}, { threshold: 0.1 });
+io.observe(document.querySelector('.pair'));
+</script>
+</body>
+</html>
