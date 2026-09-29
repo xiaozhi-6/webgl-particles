@@ -16,6 +16,11 @@
 
 **[中文](README.md) · English · [Technical notes](docs/TECHNICAL.md) · [Integration](docs/INTEGRATION.md)**
 
+> 18fps → 60fps on mobile. But the image was essentially correct from the start: 92.9% of pixels
+> were within ±0.5/255 of Canvas2D. The alpha correction I later derived turned out to be
+> **39% worse than doing nothing**, so I deleted it. The write-up of the three self-refutations
+> is in [`docs/blog-18fps-to-60fps.zh.md`](docs/blog-18fps-to-60fps.zh.md) (Chinese).
+
 </div>
 
 ---
