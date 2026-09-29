@@ -24,9 +24,6 @@
   .ctrl label{color:var(--dim);font-size:12px;display:flex;justify-content:space-between;gap:8px}
   .ctrl input[type=range]{width:100%;accent-color:var(--accent)}
   .ctrl .v{color:var(--fg);font-variant-numeric:tabular-nums}
-  .ctrl button{background:#1a1a2c;color:var(--fg);border:1px solid #33334d;border-radius:7px;
-    padding:6px 10px;cursor:pointer;font-size:12px;font-family:inherit}
-  .ctrl button.on{background:var(--accent);border-color:var(--accent);color:#06101f;font-weight:600}
   .hint{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;
     color:var(--dim);font-size:12px;pointer-events:none}
   #err{position:fixed;left:16px;top:70px;z-index:3;color:#ff8f6b;font-size:12px;
@@ -44,7 +41,6 @@
 <div class="ctrl">
   <label>粒子数 <span class="v" id="vN">200,000</span></label>
   <input id="rN" type="range" min="50000" max="1000000" step="50000" value="200000" />
-  <button id="btnAuto" class="on">自适应：开</button>
   <label>半径 <span class="v" id="vR">2.60</span></label>
   <input id="rR" type="range" min="1" max="5" step="0.1" value="2.6" />
   <label>流速 <span class="v" id="vS">1.00</span></label>
@@ -225,7 +221,6 @@ var U_RES = GL.getUniformLocation(DP, 'u_res'), U_RAD = GL.getUniformLocation(DP
 
 /* 状态：ping-pong，每粒子 2 个 float（位置） */
 var N = 200000, RAD = 2.6, SPEED = 1.0, FSCALE = 1.0;
-var AUTO = true, adaptLock = false;
 var W = 1, H = 1, DPR = 1;
 var bufA = null, bufB = null, colBuf = null, alBuf = null, TF = null;
 var mouse = [0, 0], mouseOn = 0;
@@ -341,26 +336,6 @@ function loop() {
     cpuEl.textContent = (accCpu / frames).toFixed(1) + ' ms';
     frames = 0; accCpu = 0; t0 = now;
 
-    // 自适应粒子数：目标 55~60fps。
-    // 弱显卡（尤其核显）在 fill-rate 上是瓶颈，所以唯一的办法就是少画点。
-    if (AUTO && !adaptLock) {
-      adaptLock = true;
-      var target = 200000;
-      if (fps < 50) {
-        target = Math.max(30000, Math.round(N * Math.max(0.45, fps / 58) / 10000) * 10000);
-      } else if (fps > 58 && N < 600000) {
-        target = Math.min(600000, Math.round(N * 1.25 / 10000) * 10000);
-      }
-      if (target !== N) {
-        N = target;
-        rN.value = Math.max(50000, Math.min(1000000, N));
-        vN.textContent = N.toLocaleString();
-        allocState(N);
-        // 重建后给它几帧稳定，别在抖动中反复调
-        t0 = performance.now(); frames = 0; accCpu = 0;
-      }
-      setTimeout(function () { adaptLock = false; }, 1200);
-    }
   }
 }
 
@@ -390,12 +365,6 @@ var tmr = 0;
 rN.oninput = function () {
   vN.textContent = (+rN.value).toLocaleString();
   clearTimeout(tmr); tmr = setTimeout(function () { N = +rN.value; allocState(N); }, 350);
-};
-var btnAuto = document.getElementById('btnAuto');
-btnAuto.onclick = function () {
-  AUTO = !AUTO;
-  btnAuto.classList.toggle('on', AUTO);
-  btnAuto.textContent = '自适应：' + (AUTO ? '开' : '关');
 };
 rR.oninput = function () { RAD = +rR.value; vR.textContent = RAD.toFixed(2); };
 rS.oninput = function () { SPEED = +rS.value; vS.textContent = SPEED.toFixed(2); };
