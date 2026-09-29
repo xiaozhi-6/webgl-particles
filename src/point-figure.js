@@ -165,17 +165,21 @@ export function createPointFigure(opts) {
     }
     if (!pitchReady) computePitch();
 
-    // 半径自适应：点越密、半径越大时，把修正倍数往下调（实测 1.90 → 1.58）
-    const kBase = 2.03, kSlope = 0.60;
+    // 不要做 alpha 修正。
+    //
+    // 这里曾经按「半径 / 局部点间距」把 alpha 放大（k = 2.03 - 0.60*(radius/pitch)，
+    // 1.90 疏 → 1.58 密）。那是从合成数据标定出来的，在真实图形上实测更差：
+    //   不做修正  平均绝对亮度差 0.5751
+    //   按密度修正 平均绝对亮度差 0.7987   → 差 39%
+    // 原因：这个模型假设「点均匀分布」，而真实剪影的边缘和内部密度差异极大，
+    // 用局部间距推出来的倍数在边缘过冲、在内部不足。
+    // 详情见 docs/FINDINGS-real-figure.md。
     for (let i = 0; i < N; i++) {
-      const p = PITCH[i] > 0 ? PITCH[i] : radius;
-      let k = kBase - kSlope * (radius / p);
-      if (k < 1.0) k = 1.0; else if (k > 2.4) k = 2.4;
       gRad[i] = radius;
       gCol[i * 3] = COLOR[i * 3] / 255;
       gCol[i * 3 + 1] = COLOR[i * 3 + 1] / 255;
       gCol[i * 3 + 2] = COLOR[i * 3 + 2] / 255;
-      let a = BASE_A[i] * k;
+      const a = BASE_A[i];
       gAl[i] = a > 1 ? 1 : a;
     }
 
