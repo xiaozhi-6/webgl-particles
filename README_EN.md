@@ -208,6 +208,8 @@ Mobile frame time unchanged (tablet 16.7 ms, phone 16.6 ms).
 
 **Live:** https://xiaozhi-6.github.io/webgl-particles/demo/
 
+**Side by side** (same frame, both backends running): https://xiaozhi-6.github.io/webgl-particles/demo/versus.html
+
 Locally:
 
 ```bash
