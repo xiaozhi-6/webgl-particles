@@ -148,6 +148,7 @@ export function createPointFigure(opts) {
     bw = Math.max(1, Math.round(cssW * dpr));
     bh = Math.max(1, Math.round(cssH * dpr));
     canvas.width = bw; canvas.height = bh;
+    // CSS 宽高都设上：如果样式表里给了 canvas width:100%，只设 height 会横向拉伸
     canvas.style.width = cssW + 'px';
     canvas.style.height = cssH + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
