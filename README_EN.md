@@ -132,9 +132,14 @@ alpha ≈ 0.34**. WebGL accumulates per-fragment and needs ≈ 1.0 to reach the 
 Naively porting the code therefore yields a darker, grid-like image — this is the single
 cause of the visual mismatch.
 
-### 4. Density-adaptive alpha correction
+### 4. Density-based alpha correction
 
-Calibrated by binary-searching the alpha at which WebGL converges to Canvas2D's color:
+> ⚠️ **This section documents a correction that was later disproved by real-figure
+> measurements, yet is still what ships.** It is kept here because the mistake is part of the
+> story. The coefficients below are **not** the recommended approach.
+
+An early binary search — "what alpha does WebGL need to reach Canvas2D's converged colour?" —
+was calibrated on a set of synthetic patches and produced:
 
 | radius / local pitch | Required multiplier |
 |---|---|
@@ -142,24 +147,44 @@ Calibrated by binary-searching the alpha at which WebGL converges to Canvas2D's 
 | 0.50 | ×1.840 |
 | 0.75 (dense) | ×1.584 |
 
-Overlap drives the multiplier, fitted on the **real point cloud** as:
+Fitted as `k = 2.03 - 0.60 * (radius / localPitch)`. `localPitch` is a static per-point
+property, computed once at init with a spatial grid — zero runtime cost. Applying it dropped the
+dense-state per-pixel difference from 253 to **1.12 / 255**, so the correction looked correct.
 
-```js
-k = 2.03 - 0.60 * (radius / localPitch)     // calibrated range ×1.58 – ×1.90
-alpha = min(1, baseAlpha * k)
-```
+**Measured again on the real figure, the conclusion flipped:**
 
-`localPitch` is a **static per-point property**, computed once at initialization with a spatial
-grid — **zero runtime cost**. Applying it drops the dense-state per-pixel difference from 253
-to **1.12**. No point is added, removed, resized or recolored.
+| Approach | Mean absolute luminance error (real figure) |
+|---|---|
+| The `k(density)` above (values 1.58–1.90) | **0.7987** |
+| `k = 1` (no correction at all) | **0.5751** |
 
-> **Scope of these coefficients.** They are empirical values fitted to the density distribution
-> of one real point cloud (~44k points, `radius` ≈ 1.5–2.0), not universal constants. A very
-> different radius or density scale needs recalibration. Measurements also show that **once a
-> pixel is saturated — about 98% of the content pixels here — `k` makes no difference at all**;
-> the correction only acts in the unsaturated transition band. Treat it as a calibrated
-> correction for this class of point cloud, not a physical law. The derivation and the paths
-> that failed are documented in [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
+**The correction is 39% worse than doing nothing.** Two reasons:
+
+1. **The coefficients were calibrated on synthetic patches.** Their density distribution and
+   sub-pixel phase differ from the real cloud, so the "needs ×1.6–1.9" observed there does not
+   hold — the real requirement peaks at **1.3**.
+2. **Only sparse pixels benefit.** **98.2%** of the real figure's content pixels are already
+   saturated, and once saturated `k` makes no difference. Meanwhile, over the **96%** of pixels
+   that are dense, `k(density)` pushes the error from 0.18 up to 0.48.
+
+Bucketed by per-pixel base alpha accumulation `A0`, the real requirement is:
+
+| A0 range | Share | Best k |
+|---|---|---|
+| [0.00,0.75) | 1.25% | **k = 1.3** |
+| [0.75,1.50) | 0.95% | **k = 1.1** |
+| [1.50,3.00) | 1.69% | **k = 1.05** |
+| **[3.00,9.00)** | **96.1%** | **k = 1** |
+
+`k` falls monotonically from 1.3 to 1.0. But assigning `k` **per point** cannot reproduce the
+per-pixel optimum (measured 0.5704 vs a per-bucket lower bound of 0.4572), because one point
+covers several pixels and a single `k` averages away the differences between them.
+
+**And the whole thing is small.** The worst error, 25/255, occurs on just 0.65% of pixels;
+92.9% of content pixels are within **±0.5**. The dense state was essentially correct from the
+start — only the thin sparse rim needs attention.
+
+> Full measurements and derivation: [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
 
 ## Demo
 
