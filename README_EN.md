@@ -60,7 +60,7 @@ accounts for 1.6% of the frame.
 
 | State | Luminance ratio | Mean abs. diff | Pixels off by >40 |
 |---|---|---|---|
-| Dense / gathered | **0.9991** | **0.5751 / 255** | **0.11%** |
+| Dense / gathered | **0.9991** | **0.5427 / 255** | **0.085%** |
 | In transition | 1.08 – 1.23 | 68 – 75 | 59% – 71% |
 
 Static views are visually identical; 92.9% of content pixels are within ±0.5/255. During rapid
@@ -225,6 +225,7 @@ that only served it (1975 fewer bytes, one fewer init loop).
 Mobile frame time unchanged (tablet 16.7 ms, phone 16.6 ms).
 
 Full data: [`docs/FINDINGS-real-figure.md`](docs/FINDINGS-real-figure.md) and
+├── docs/FINDINGS-expansion-fix.md   The quad-expansion fix (the one positive change)
 [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
 
 ## Layout
