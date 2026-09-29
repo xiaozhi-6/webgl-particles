@@ -1,0 +1,20 @@
+# 依赖（本项目零依赖，这里只为通用性保留）
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# 构建产物
+dist/
+build/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# 日志
+*.log
+npm-debug.log*
