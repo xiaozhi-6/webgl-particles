@@ -2,8 +2,8 @@
   <img src="assets/logo.svg" width="132" alt="webgl-particles" />
   <h1>webgl-particles</h1>
   <p><b>A WebGL2 particle renderer that composites like Canvas2D.</b><br>
-     Points blend into each other instead of staying isolated — so a 100,000-point
-     figure holds 60fps on mobile, at Canvas2D visual quality.</p>
+     Points blend into each other instead of staying isolated, so a 100,000-point
+     figure holds 60fps on mobile at Canvas2D visual quality.</p>
 </div>
 
 <div align="center">
@@ -12,14 +12,16 @@
 [![WebGL2](https://img.shields.io/badge/WebGL-2.0-990000.svg)](https://www.khronos.org/webgl/)
 [![Zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#install)
 [![No build step](https://img.shields.io/badge/build-none-brightgreen.svg)](#install)
-[![Demo](https://img.shields.io/badge/Demo-live-blue.svg)](https://xiaozhi-6.github.io/webgl-particles/demo/)
 
-**[中文](README.md) · English · [Technical notes](docs/TECHNICAL.md) · [Integration](docs/INTEGRATION.md)**
+<h3><a href="https://xiaozhi-6.github.io/webgl-particles/demo/versus.html">▶ Open the side-by-side demo</a></h3>
+<p>Same frame, same point cloud, Canvas2D and WebGL2 rendering at once, each timed separately.</p>
 
-> 18fps → 60fps on mobile. But the image was essentially correct from the start: 92.9% of pixels
-> were within ±0.5/255 of Canvas2D. The alpha correction I later derived turned out to be
-> **39% worse than doing nothing**, so I deleted it. The write-up of the three self-refutations
-> is in [`docs/blog-18fps-to-60fps.zh.md`](docs/blog-18fps-to-60fps.zh.md) (Chinese).
+**中文 · English · [Technical notes](docs/TECHNICAL.md) · [Integration](docs/INTEGRATION.md)**
+
+<sub>18fps → 60fps on mobile. The image was essentially correct from the start: 92.9% of pixels are
+within ±0.5/255 of Canvas2D. An alpha correction I later derived turned out to be
+**39% worse than doing nothing**, so I deleted it.
+<a href="docs/blog-18fps-to-60fps.zh.md">The three self-refutations (Chinese)</a>.</sub>
 
 </div>
 
@@ -29,7 +31,7 @@
 
 Drawing a silhouette built from tens of thousands of **independent translucent points** is the
 standard way to get a soft, pointillist figure on the web. With Canvas2D it looks right, and on
-desktop it runs fine — but on a phone it collapses to **~18fps**.
+desktop it runs fine, but on a phone it collapses to **~18fps**.
 
 The usual remedies don't work. Measured on a real 43,991-point figure:
 
@@ -38,15 +40,15 @@ The usual remedies don't work. Measured on a real 43,991-point figure:
 | Shrink the backing store to 2.1 Mpx (−62%) | render time **unchanged** |
 | Batch everything into one `Path2D` fill | 2.8× faster, but **speckle artifacts where points overlap** |
 | Pre-rendered sprite via `drawImage` | **slower** (116 ms/frame) |
-| **Instanced quads in WebGL2** | **47× faster** |
+| **Instanced quads in WebGL2** | **30×+ faster** |
 
 The cost was never fill rate. It's the fixed per-call overhead of 43,991
-`beginPath` + `arc` + `fill` calls — about **1.08 µs per point**. The math behind the motion
+`beginPath` + `arc` + `fill` calls, about **1.08 µs per point**. The math behind the motion
 accounts for 1.6% of the frame.
 
 ## Results
 
-43,991 points, figure-layer rAF interval while scrolling:
+**Frame interval while scrolling** (43,991 points, measuring the figure's own layer):
 
 | Device | Canvas2D | **webgl-particles** |
 |---|---|---|
@@ -54,16 +56,16 @@ accounts for 1.6% of the frame.
 | Phone · 412×915 · dpr 3 | 53.5 ms (≈19fps) | **16.6 ms (60fps)** |
 | Desktop · 1440×900 · dpr 1 | 60fps | 60fps |
 
-Image fidelity, per-pixel against the Canvas2D reference:
+**Per-pixel comparison against Canvas2D** (composited onto the dark background first):
 
 | State | Luminance ratio | Mean abs. diff | Pixels off by >40 |
 |---|---|---|---|
-| Dense / gathered | **0.9991** | **1.12 / 255** | **0.28%** |
+| Dense / gathered | **0.9991** | **0.5751 / 255** | **0.11%** |
 | In transition | 1.08 – 1.23 | 68 – 75 | 59% – 71% |
 
-Static views are effectively identical. During rapid scatter transitions the WebGL path reads
-8–23% brighter on average; on device the difference is subtle. See
-[Known limitations](#known-limitations) and [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
+Static views are visually identical; 92.9% of content pixels are within ±0.5/255. During rapid
+scatter transitions the WebGL path reads 8–23% brighter on average, which on device requires
+deliberate comparison to notice. See [Known limitations](#known-limitations).
 
 ## Install
 
@@ -100,7 +102,7 @@ device pixels**. At a 1.32 px radius the 5.29 px diameter snaps to 5 or 6, visib
 small points.
 
 Instead each point instantiates a quad, and the circle is carved out in the fragment shader
-with a half-device-pixel antialiasing band — sub-pixel accurate at any radius.
+with a half-device-pixel antialiasing band, sub-pixel accurate at any radius.
 
 ```glsl
 float dist = length(v_local) * v_rad;      // distance to center, CSS px
@@ -119,33 +121,58 @@ gl.enable(gl.BLEND);
 gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 ```
 
-### 3. Matching Canvas2D's alpha saturation
+### 3. Do not apply an alpha correction
 
-This is the part that makes the visual parity possible.
+This one is a negative result, and it is the easiest thing to get wrong here.
 
-In a fully covered dense patch with dot color `rgb(120,110,180)`:
+The WebGL version looks darker. Measuring a fully covered dense patch (dot color `rgb(120,110,180)`):
 
 | Per-point alpha | Canvas2D | WebGL | Ratio |
 |---|---|---|---|
 | 0.10 | 117.4 | 37.6 | 0.32 |
 | 0.20 | 119.8 | 64.4 | 0.54 |
-| **0.34** | **120.0 — saturated** | 92.2 | 0.77 |
+| **0.34** | **120.0 (saturated)** | 92.2 | 0.77 |
 | 1.00 | 120.0 | 120.0 | 1.00 |
 
-Canvas2D issues 44,000 independent source-over composites, so dense regions **saturate at
-alpha ≈ 0.34**. WebGL accumulates per-fragment and needs ≈ 1.0 to reach the same color.
-Naively porting the code therefore yields a darker, grid-like image — this is the single
-cause of the visual mismatch.
+Canvas2D issues independent source-over composites, so dense regions saturate at alpha 0.34;
+WebGL accumulates per-fragment and needs 1.0. **It looks like multiplying alpha by some factor
+would align them.**
 
-### 4. Density-based alpha correction
+That is a natural conclusion, and I acted on it, with convincing-looking metrics at the time.
+Real-figure measurements later disproved it. See
+[The wrong turn](#the-wrong-turn-density-based-alpha-correction-do-not-use).
+**The current code applies no alpha correction at all.**
 
-> ⚠️ **This section documents a correction that once shipped, was disproved by real-figure
-> measurements, and has since been removed.** It is kept because the mistake is instructive.
-> The coefficients below are **not** the recommended approach — the current code applies no
-> correction at all.
+## Demo
 
-An early binary search — "what alpha does WebGL need to reach Canvas2D's converged colour?" —
-was calibrated on a set of synthetic patches and produced:
+**▶ [Side by side](https://xiaozhi-6.github.io/webgl-particles/demo/versus.html)** — start here.
+Same frame, same point cloud, both backends rendering simultaneously, each timed.
+
+**[Interactive demo](https://xiaozhi-6.github.io/webgl-particles/demo/)** — switch backends and
+adjust radius / DPR. The point cloud is synthesized from geometry; **the repository contains no
+image assets**.
+
+Locally:
+
+```bash
+python -m http.server 8080
+# side by side  http://127.0.0.1:8080/demo/versus.html
+# interactive   http://127.0.0.1:8080/demo/
+```
+
+| Scenario | Canvas2D | WebGL2 | Ratio |
+|---|---|---|---|
+| Side by side · desktop 1280×1000 · 24,038 points | 15.30 ms | **0.50 ms** | **31×** |
+| Side by side · phone 412×915 · 15,829 points | 9.80 ms | **0.40 ms** | **33×** |
+
+## The wrong turn: density-based alpha correction (do not use)
+
+> ⛔ **The conclusion of this section is "don't do this."** It documents an approach that once
+> shipped, was disproved by real-figure measurements, and has been **removed from the code**.
+> It is here only because the mistake is instructive. **It is not part of the implementation.**
+
+The approach: binary-search the alpha at which WebGL reaches Canvas2D's converged color,
+calibrated on a set of **synthetic patches**:
 
 | radius / local pitch | Required multiplier |
 |---|---|
@@ -153,25 +180,25 @@ was calibrated on a set of synthetic patches and produced:
 | 0.50 | ×1.840 |
 | 0.75 (dense) | ×1.584 |
 
-Fitted as `k = 2.03 - 0.60 * (radius / localPitch)`. `localPitch` is a static per-point
-property, computed once at init with a spatial grid — zero runtime cost. Applying it dropped the
-dense-state per-pixel difference from 253 to **1.12 / 255**, so the correction looked correct.
+Fitted as `k = 2.03 - 0.60 * (radius / localPitch)`. `localPitch` is a static per-point property
+computed once at init with a spatial grid, zero runtime cost. It dropped the dense-state per-pixel
+difference from 253 to **1.12 / 255**, so at the time it looked correct.
 
-**Measured again on the real figure, the conclusion flipped:**
+**Re-measured on the real figure, the conclusion flipped:**
 
 | Approach | Mean absolute luminance error (real figure) |
 |---|---|
 | The `k(density)` above (values 1.58–1.90) | **0.7987** |
-| `k = 1` (no correction at all) | **0.5751** |
+| `k = 1` (no correction) | **0.5751** |
 
-**The correction is 39% worse than doing nothing.** Two reasons:
+**39% worse than doing nothing.** Two reasons:
 
-1. **The coefficients were calibrated on synthetic patches.** Their density distribution and
-   sub-pixel phase differ from the real cloud, so the "needs ×1.6–1.9" observed there does not
-   hold — the real requirement peaks at **1.3**.
+1. **The coefficients came from synthetic patches.** Their density distribution and sub-pixel
+   phase differ from a real point cloud. What looked like "needs ×1.6–1.9" there is at most
+   **1.3** in reality.
 2. **Only sparse pixels benefit.** **98.2%** of the real figure's content pixels are already
-   saturated, and once saturated `k` makes no difference. Meanwhile, over the **96%** of pixels
-   that are dense, `k(density)` pushes the error from 0.18 up to 0.48.
+   saturated, where `k` is irrelevant. Over the **96%** that are dense, `k(density)` pushed the
+   error from 0.18 up to 0.48.
 
 Bucketed by per-pixel base alpha accumulation `A0`, the real requirement is:
 
@@ -182,17 +209,13 @@ Bucketed by per-pixel base alpha accumulation `A0`, the real requirement is:
 | [1.50,3.00) | 1.69% | **k = 1.05** |
 | **[3.00,9.00)** | **96.1%** | **k = 1** |
 
-`k` falls monotonically from 1.3 to 1.0. But assigning `k` **per point** cannot reproduce the
-per-pixel optimum (measured 0.5704 vs a per-bucket lower bound of 0.4572), because one point
-covers several pixels and a single `k` averages away the differences between them.
+Even implementing that curve **per point** measured 0.5704 against 0.5751 for no correction at
+all, a difference of 0.005. One point covers several pixels, so a single `k` averages away the
+differences between them. Reaching the per-bucket optimum (0.4572) would need per-pixel `A0`,
+which requires an extra additive-blend GPU pass. Not worth it.
 
-**And the whole thing is small.** The worst error, 25/255, occurs on just 0.65% of pixels;
-92.9% of content pixels are within **±0.5**. The dense state was essentially correct from the
-start — only the thin sparse rim needs attention.
-
-**Final disposition: the correction has been removed from the code** (`main.js` no longer
-computes `k`; base alpha is used directly), along with the `localPitch` grid that only served it.
-Measured after removal:
+**Final disposition: the correction was removed from the code**, along with the `localPitch` grid
+that only served it (1975 fewer bytes, one fewer init loop).
 
 | | Mean absolute luminance error | Pixels off by >40 |
 |---|---|---|
@@ -201,43 +224,25 @@ Measured after removal:
 
 Mobile frame time unchanged (tablet 16.7 ms, phone 16.6 ms).
 
-> Full measurements: [`docs/TECHNICAL.md`](docs/TECHNICAL.md) and
-> [`docs/FINDINGS-real-figure.md`](docs/FINDINGS-real-figure.md).
-
-## Demo
-
-**Live:** https://xiaozhi-6.github.io/webgl-particles/demo/
-
-**Side by side** (same frame, both backends running): https://xiaozhi-6.github.io/webgl-particles/demo/versus.html
-
-Locally:
-
-```bash
-python -m http.server 8080
-# open http://127.0.0.1:8080/demo/
-```
-
-The demo synthesizes its own point cloud from geometry — **the repository contains no image
-assets**. Switch backends and adjust radius / DPR live to see the cost difference.
-
-| Backend | Frame time | FPS |
-|---|---|---|
-| WebGL2 | **0.70 ms** | **60** |
-| Canvas2D | 32.80 ms | 29 |
+Full data: [`docs/FINDINGS-real-figure.md`](docs/FINDINGS-real-figure.md) and
+[`docs/TECHNICAL.md`](docs/TECHNICAL.md).
 
 ## Layout
 
 ```
 webgl-particles/
 ├── src/
-│   ├── point-figure.js        WebGL2 implementation
-│   └── canvas2d-figure.js     Canvas2D reference (fidelity baseline & fallback)
+│   ├── point-figure.js            WebGL2 implementation
+│   └── canvas2d-figure.js         Canvas2D reference (fidelity baseline & fallback)
 ├── demo/
-│   ├── index.html             Self-contained demo
-│   └── points.js              Synthetic point cloud
+│   ├── versus.html                Side by side (same frame, both backends)
+│   ├── index.html                 Interactive demo (switch backends, tweak params)
+│   └── points.js                  Synthetic point cloud (no image assets)
 ├── docs/
-│   ├── TECHNICAL.md           All measurements, calibration data, pitfalls
-│   └── INTEGRATION.md         Adopting this safely, with a feature flag
+│   ├── TECHNICAL.md               All measurements, calibration data, pitfalls
+│   ├── FINDINGS-real-figure.md    Real-figure measurement report
+│   ├── blog-18fps-to-60fps.zh.md  Write-up: the three self-refutations (Chinese)
+│   └── INTEGRATION.md             Adopting this safely, with a feature flag
 ├── assets/logo.svg
 ├── CONTRIBUTING.md
 ├── CODE_OF_CONDUCT.md
@@ -246,18 +251,17 @@ webgl-particles/
 
 ## Known limitations
 
-1. **Transition states read 8–23% brighter.** Static/dense views are nearly pixel-identical, but
-   when the cloud rapidly disperses a deviation appears. Likely cause: the local density estimate
-   is less accurate for randomly distributed points than for the regular grid used during
-   calibration. Finer density buckets should close most of the gap.
-2. **The `k` fit is empirical.** It degrades outside `radius/pitch ∈ [0.2, 0.75]` and is clamped
-   there.
-3. **Tested on Chrome / Edge / Safari WebGL2.** Older devices rely on the Canvas2D fallback.
+1. **Transition states read 8–23% brighter.** Static and dense views are nearly pixel-identical,
+   but a deviation appears when the cloud rapidly disperses. On the real figure the error
+   concentrates in the sparse rim (about 2.95% of content pixels, worst case 25/255); the dense
+   region is accurate. Closing it requires solving "a per-point correction cannot realise a
+   per-pixel optimum."
+2. **Tested on Chrome / Edge / Safari WebGL2.** Older devices rely on the Canvas2D fallback.
 
 ## Credits
 
-- The compositing-saturation insight and its calibration approach were developed for a personal
-  site; the technique is extracted here as a standalone library.
+- The compositing-saturation observation and the measurement method came out of optimizing a
+  personal site; the technique is extracted here as a standalone library.
 - Inspiration for high-performance canvas work comes from the studio sites of
   **miHoYo** (idle-time scheduling, visibility gating) and **Hypergryph**
   (pure `vw` proportional scaling, blend-mode-driven visuals).
