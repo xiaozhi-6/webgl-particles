@@ -14,7 +14,10 @@
 [![No build step](https://img.shields.io/badge/build-none-brightgreen.svg)](#安装)
 [![Demo](https://img.shields.io/badge/Demo-在线试-blue.svg)](https://xiaozhi-6.github.io/webgl-particles/demo/)
 
-**中文 · [English](README_EN.md) · [技术细节](docs/TECHNICAL.md) · [接入指南](docs/INTEGRATION.md)**
+**中文 · [English](README_EN.md) · [技术细节](docs/TECHNICAL.md) · [接入指南](docs/INTEGRATION.md) · [实战记录](docs/blog-18fps-to-60fps.zh.md)**
+
+> 手机端 18fps → 60fps。但画质从一开始就基本是对的：92.9% 的像素与 Canvas2D 的偏差在 ±0.5/255 以内。
+> 我后来写了一个 alpha 修正公式，实测发现**它比什么都不做还差 39%**，于是删掉了。那三次被自己推翻的过程写在这里 →
 
 </div>
 
