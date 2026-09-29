@@ -13,8 +13,15 @@
 [![Zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#安装)
 [![No build step](https://img.shields.io/badge/build-none-brightgreen.svg)](#安装)
 
-<h3><a href="https://xiaozhi-6.github.io/webgl-particles/demo/versus.html">▶ 打开并排对比演示</a></h3>
+<h3><a href="https://xiaozhi-6.github.io/webgl-particles/demo/interactive.html">▶ 交互演示：百万粒子跟随鼠标</a></h3>
+<p>移动鼠标，整团粒子被直接吸引过去。<b>预渲染动画做不到响应输入，所以这个交互本身就能证明画面是实时算的。</b><br>
+左下角的 CPU 每帧读数就在粒子数旁边 —— 拉动滑块，粒子数从 5 万变到 150 万，它始终接近 0。</p>
+
+<h3><a href="https://xiaozhi-6.github.io/webgl-particles/demo/versus.html">▶ 并排对比演示</a></h3>
 <p>同一帧、同一套点云，Canvas2D 与 WebGL2 同时渲染，各自计时。</p>
+
+<sub>另外还有一个流场演示：<a href="https://xiaozhi-6.github.io/webgl-particles/demo/flowfield.html">flowfield.html</a>
+（多八度时变流函数 + curl noise 的实验记录，见 <a href="docs/FINDINGS-flowfield.md">流场笔记</a>）。</sub>
 
 **中文 · [English](README_EN.md) · [技术细节](docs/TECHNICAL.md) · [GPU 成本结构](docs/FINDINGS-gpu-cost.md) · [测量陷阱](docs/MEASUREMENT-PITFALLS.md) · [接入指南](docs/INTEGRATION.md) · [实战记录](docs/blog-18fps-to-60fps.zh.md)**
 
