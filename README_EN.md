@@ -142,16 +142,24 @@ Calibrated by binary-searching the alpha at which WebGL converges to Canvas2D's 
 | 0.50 | ×1.840 |
 | 0.75 (dense) | ×1.584 |
 
-Overlap drives the multiplier, fitted as:
+Overlap drives the multiplier, fitted on the **real point cloud** as:
 
 ```js
-k = 2.03 - 0.60 * (radius / localPitch)     // measured range ×1.58 – ×1.90
+k = 2.03 - 0.60 * (radius / localPitch)     // calibrated range ×1.58 – ×1.90
 alpha = min(1, baseAlpha * k)
 ```
 
 `localPitch` is a **static per-point property**, computed once at initialization with a spatial
 grid — **zero runtime cost**. Applying it drops the dense-state per-pixel difference from 253
 to **1.12**. No point is added, removed, resized or recolored.
+
+> **Scope of these coefficients.** They are empirical values fitted to the density distribution
+> of one real point cloud (~44k points, `radius` ≈ 1.5–2.0), not universal constants. A very
+> different radius or density scale needs recalibration. Measurements also show that **once a
+> pixel is saturated — about 98% of the content pixels here — `k` makes no difference at all**;
+> the correction only acts in the unsaturated transition band. Treat it as a calibrated
+> correction for this class of point cloud, not a physical law. The derivation and the paths
+> that failed are documented in [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
 
 ## Demo
 
