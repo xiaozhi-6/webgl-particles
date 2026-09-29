@@ -134,9 +134,10 @@ cause of the visual mismatch.
 
 ### 4. Density-based alpha correction
 
-> ⚠️ **This section documents a correction that was later disproved by real-figure
-> measurements, yet is still what ships.** It is kept here because the mistake is part of the
-> story. The coefficients below are **not** the recommended approach.
+> ⚠️ **This section documents a correction that once shipped, was disproved by real-figure
+> measurements, and has since been removed.** It is kept because the mistake is instructive.
+> The coefficients below are **not** the recommended approach — the current code applies no
+> correction at all.
 
 An early binary search — "what alpha does WebGL need to reach Canvas2D's converged colour?" —
 was calibrated on a set of synthetic patches and produced:
@@ -184,7 +185,19 @@ covers several pixels and a single `k` averages away the differences between the
 92.9% of content pixels are within **±0.5**. The dense state was essentially correct from the
 start — only the thin sparse rim needs attention.
 
-> Full measurements and derivation: [`docs/TECHNICAL.md`](docs/TECHNICAL.md).
+**Final disposition: the correction has been removed from the code** (`main.js` no longer
+computes `k`; base alpha is used directly), along with the `localPitch` grid that only served it.
+Measured after removal:
+
+| | Mean absolute luminance error | Pixels off by >40 |
+|---|---|---|
+| Before (with `k(density)`) | 0.7987 | — |
+| **After (`k = 1`)** | **0.5751** | **0.11%** |
+
+Mobile frame time unchanged (tablet 16.7 ms, phone 16.6 ms).
+
+> Full measurements: [`docs/TECHNICAL.md`](docs/TECHNICAL.md) and
+> [`docs/FINDINGS-real-figure.md`](docs/FINDINGS-real-figure.md).
 
 ## Demo
 
