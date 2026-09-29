@@ -111,42 +111,33 @@ var SV = ['#version 300 es',
   'uniform vec2 u_mouse; uniform float u_mouseOn;',
   'out vec2 v_pos;',
   '',
-  // 三个【随时间振荡位置】的涡旋 -> 混沌混合（blinking vortex）。
-  // 这一条是必须的：静态的散度为零场不会混合，只会把粒子分层到不变流形上，
-  // 表现为"粒子聚成几条线、其余地方空掉"。实测数据见 _ref/FINDINGS-flowfield-mixing.md
-  'vec2 vortex(vec2 p, vec2 c, float s, float core) {',
-  '  vec2 d = p - c;',
-  '  float r2 = dot(d, d) + core;',
-  '  return s * vec2(-d.y, d.x) / r2;',
+  // 时变流函数 ψ(q, t)。
+  // 速度取旋度：vx = ∂ψ/∂y,  vy = -∂ψ/∂x   -> 自动无散度（保面积，不聚集）。
+  // 关键：ψ 本身就带时间依赖，所以流场形态随时间变化，而不是"固定形态 + 移动的涡旋"。
+  // 频率用无理数比（√2 / √3 / √5 / 黄金比）保证永不精确重复。
+  'float psi(vec2 q, float t) {',
+  '  float s = 0.0;',
+  '  s += sin(q.x * 1.000 + t * 0.370) * cos(q.y * 1.000 - t * 0.290);',
+  '  s += 0.62 * sin(q.x * 1.730 + q.y * 1.210 + t * 0.530);',
+  '  s += 0.44 * cos(q.y * 2.310 - q.x * 1.870 - t * 0.410);',
+  '  s += 0.30 * sin(q.x * 0.986 + q.y * 1.174 + t * 0.398);',
+  '  s += 0.22 * cos(q.x * 4.200 + q.y * 2.476 - t * 0.425);',
+  '  s += 0.14 * sin(q.x * 3.100 - q.y * 3.700 + t * 0.610);',
+  '  return s;',
   '}',
   '',
   'void main() {',
   '  vec2 p = a_pos;',
   '  float t = u_time * u_speed;',
   '  float S = length(u_res) * 0.5;',
-  '  float sc = u_scale;',
-  // 频率全部取【无理数比】，保证永不精确重复。
-  // 之前用 0.62 / 0.83 / 0.51 / 0.71 / 0.44 / 0.59 这些有限小数，
-  // 它们之间有公周期 -> 流场严格周期性重复 -> 看起来像 GIF 循环。
-  '  const float G = 1.6180339887;',          // 黄金比
-  '  const float R2 = 1.4142135624;',
-  '  const float R3 = 1.7320508076;',
-  '  const float R5 = 2.2360679775;',
-  '  float f1 = 0.37 * G, f2 = 0.37 * R2, f3 = 0.29 * R3, f4 = 0.29 * R5;',
-  '  float f5 = 0.23 * G * R2, f6 = 0.23 * R3;',
-  '  vec2 c1 = u_res*0.5 + vec2(cos(t*f1), sin(t*f2)) * S*0.42*sc;',
-  '  vec2 c2 = u_res*0.5 + vec2(cos(t*f3+2.1), sin(t*f4+1.3)) * S*0.38*sc;',
-  '  vec2 c3 = u_res*0.5 + vec2(cos(t*f5+4.0), sin(t*f6+3.1)) * S*0.46*sc;',
-  '  float core = S*0.010;',
-  '  vec2 v = vortex(p,c1, 1.00, core)',
-  '         + vortex(p,c2,-0.85, core)',
-  '         + vortex(p,c3, 0.70, core);',
-  '  vec2 d0 = p - u_res*0.5;',
-  '  v += vec2(-d0.y, d0.x) * 0.00035;',      // 整体旋转，带来大尺度剪切
-  // 大尺度准周期漂移：让整体形态也在缓慢变化，进一步打破重复感
-  '  float ds = t * 0.0413;',                 // 0.0413 ≈ 无理数比的小频率
-  '  v += vec2(cos(ds*1.0 + p.y*0.0011), sin(ds*1.7 + p.x*0.0009)) * 0.00085;',
-  '  p += v * (S * 180.0 * u_speed) * 0.016;',
+  '  float k = 2.2 / S * u_scale;',
+  '  vec2 q = p * k;',
+  '  float e = 0.22;',
+  '  float dpx = (psi(q + vec2(e,0.0), t) - psi(q - vec2(e,0.0), t)) / (2.0*e);',
+  '  float dpy = (psi(q + vec2(0.0,e), t) - psi(q - vec2(0.0,e), t)) / (2.0*e);',
+  '  vec2 v = vec2(dpy, -dpx);',
+  '  vec2 d0 = p - u_res * 0.5;',
+  '  p += v * (S * 130.0 * u_speed) * 0.016;',
   '',
   '  float r0 = length(d0) / max(S, 1.0);',
   '  if (r0 > 0.9) { p -= normalize(d0 + 1e-6) * (r0 - 0.9) * S * 0.045; }',
