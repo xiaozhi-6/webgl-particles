@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img"
+     aria-label="webgl-particles logo: a dot field that fuses into a solid core">
+  <title>webgl-particles</title>
+  <desc>Points scatter at the edges and blend into a saturated core — independent WebGL points
+        behaving like Canvas2D source-over compositing.</desc>
+
+  <defs>
+    <!-- 从冷到暖的调色板，同时承载「散 → 聚」的语义 -->
+    <linearGradient id="wp-pal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0"    stop-color="#7C6FB8"/>
+      <stop offset="0.45" stop-color="#A79BE0"/>
+      <stop offset="1"    stop-color="#F5C422"/>
+    </linearGradient>
+
+    <!-- 核心实心块的径向渐变 -->
+    <radialGradient id="wp-core" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0"   stop-color="#FFF4D6"/>
+      <stop offset="0.42" stop-color="#F5C422"/>
+      <stop offset="1"   stop-color="#A79BE0"/>
+    </radialGradient>
+
+    <!-- 中间的柔和过渡：让「密实处饱和」这件事看得见 -->
+    <radialGradient id="wp-bloom" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0"   stop-color="#F5C422" stop-opacity="0.55"/>
+      <stop offset="0.55" stop-color="#A79BE0" stop-opacity="0.22"/>
+      <stop offset="1"   stop-color="#7C6FB8" stop-opacity="0"/>
+    </radialGradient>
+
+    <clipPath id="wp-clip">
+      <rect x="0" y="0" width="200" height="200" rx="44" ry="44"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#wp-clip)">
+    <!-- 底板 -->
+    <rect width="200" height="200" fill="#0B0B12"/>
+    <rect width="200" height="200" fill="url(#wp-bloom)"/>
+
+    <!--
+      点阵：环状排布，越靠外点越小、越暗、越独立；
+      越靠内点越大越亮，直到中心融成一块。
+      用一个 group 统一裁剪到圆内，做出「剪影」的感觉。
+    -->
+    <g fill="url(#wp-pal)">
+      <!-- 外环：稀疏、小、独立 -->
+      <g opacity="0.42">
+        <circle cx="100" cy="14"  r="2.6"/>
+        <circle cx="143" cy="26"  r="2.6"/>
+        <circle cx="172" cy="61"  r="2.6"/>
+        <circle cx="186" cy="100" r="2.6"/>
+        <circle cx="172" cy="139" r="2.6"/>
+        <circle cx="143" cy="174" r="2.6"/>
+        <circle cx="100" cy="186" r="2.6"/>
+        <circle cx="57"  cy="174" r="2.6"/>
+        <circle cx="28"  cy="139" r="2.6"/>
+        <circle cx="14"  cy="100" r="2.6"/>
+        <circle cx="28"  cy="61"  r="2.6"/>
+        <circle cx="57"  cy="26"  r="2.6"/>
+      </g>
+
+      <!-- 中环：开始变密、变大 -->
+      <g opacity="0.72">
+        <circle cx="100" cy="42"  r="4.2"/>
+        <circle cx="141" cy="59"  r="4.2"/>
+        <circle cx="158" cy="100" r="4.2"/>
+        <circle cx="141" cy="141" r="4.2"/>
+        <circle cx="100" cy="158" r="4.2"/>
+        <circle cx="59"  cy="141" r="4.2"/>
+        <circle cx="42"  cy="100" r="4.2"/>
+        <circle cx="59"  cy="59"  r="4.2"/>
+        <!-- 补间点，让中环看起来是"连续渐变"而不是两层 -->
+        <circle cx="120" cy="49"  r="3.6"/>
+        <circle cx="151" cy="80"  r="3.6"/>
+        <circle cx="151" cy="120" r="3.6"/>
+        <circle cx="120" cy="151" r="3.6"/>
+        <circle cx="80"  cy="151" r="3.6"/>
+        <circle cx="49"  cy="120" r="3.6"/>
+        <circle cx="49"  cy="80"  r="3.6"/>
+        <circle cx="80"  cy="49"  r="3.6"/>
+      </g>
+
+      <!-- 内环：几乎贴在一起 -->
+      <g opacity="0.92">
+        <circle cx="100" cy="68"  r="6.4"/>
+        <circle cx="132" cy="85"  r="6.4"/>
+        <circle cx="132" cy="115" r="6.4"/>
+        <circle cx="100" cy="132" r="6.4"/>
+        <circle cx="68"  cy="115" r="6.4"/>
+        <circle cx="68"  cy="85"  r="6.4"/>
+        <circle cx="117" cy="77"  r="5.6"/>
+        <circle cx="123" cy="100" r="5.6"/>
+        <circle cx="117" cy="123" r="5.6"/>
+        <circle cx="100" cy="123" r="5.6"/>
+        <circle cx="83"  cy="123" r="5.6"/>
+        <circle cx="77"  cy="100" r="5.6"/>
+        <circle cx="83"  cy="77"  r="5.6"/>
+        <circle cx="100" cy="77"  r="5.6"/>
+      </g>
+
+      <!-- 核心：融成实心，象征 alpha 饱和 -->
+      <circle cx="100" cy="100" r="26" fill="url(#wp-core)"/>
+    </g>
+
+    <!-- 一点点高光，让核心不呆板 -->
+    <ellipse cx="91" cy="91" rx="9" ry="7" fill="#FFFFFF" opacity="0.30"/>
+  </g>
+
+  <!-- 外框：跟话题里的圆角风格一致 -->
+  <rect x="0.75" y="0.75" width="198.5" height="198.5" rx="43.25" ry="43.25"
+        fill="none" stroke="#A79BE0" stroke-opacity="0.28" stroke-width="1.5"/>
+</svg>
