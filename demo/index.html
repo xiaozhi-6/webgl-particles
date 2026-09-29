@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>point-figure demo — Canvas2D 的观感 / WebGL 的开销</title>
+<style>
+  :root { --bg: #0a0a0a; --fg: #e8e8f0; --dim: #8a8aa0; --accent: #6799fe; --card: #12121a; --line: #23233a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.6 -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 22px 18px 56px; }
+  h1 { font-size: 21px; margin: 0 0 3px; letter-spacing: .2px; }
+  .sub { color: var(--dim); margin: 0 0 18px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; margin-bottom: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .row + .row { margin-top: 9px; }
+  label { color: var(--dim); font-size: 13px; }
+  input[type=range] { width: 150px; vertical-align: middle; }
+  button { background: #1c1c2e; color: var(--fg); border: 1px solid #33334d; border-radius: 7px;
+           padding: 7px 13px; cursor: pointer; font-size: 13px; }
+  button:hover { border-color: var(--accent); }
+  button.on { background: var(--accent); border-color: var(--accent); color: #06101f; font-weight: 600; }
+  #stage { position: relative; background: #0d0d14; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  canvas { display: block; }
+  #stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 9px; margin-top: 14px; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; }
+  .stat b { display: block; font-size: 19px; font-weight: 600; }
+  .stat span { color: var(--dim); font-size: 12px; }
+  .note { color: var(--dim); font-size: 13px; }
+  .note b { color: var(--fg); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>point-figure</h1>
+  <p class="sub">用 Canvas2D 的观感，跑 WebGL 的开销 —— 十万级点云，移动端 ~18fps → 60fps。</p>
+
+  <div class="panel">
+    <div class="row">
+      <label>渲染后端</label>
+      <button id="bGL" class="on">WebGL2（默认）</button>
+      <button id="bC2">Canvas2D（参照）</button>
+      <label style="margin-left:auto">点数 <b id="npts">—</b></label>
+    </div>
+    <div class="row">
+      <label>半径 <input id="rad" type="range" min="0.8" max="4" step="0.05" value="1.5" /> <b id="radV">1.50</b> px</label>
+      <label>设备像素比 <input id="dpr" type="range" min="1" max="3" step="0.5" value="2" /> <b id="dprV">2</b></label>
+    </div>
+  </div>
+
+  <div id="stage"><canvas id="cv"></canvas></div>
+
+  <div id="stats">
+    <div class="stat"><b id="sFrame">—</b><span>单帧渲染耗时</span></div>
+    <div class="stat"><b id="sFps">—</b><span>连续渲染帧率</span></div>
+    <div class="stat"><b id="sBack">—</b><span>当前后端</span></div>
+    <div class="stat"><b id="sBuf">—</b><span>画布缓冲区</span></div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <p style="margin:0 0 6px"><b>怎么看</b></p>
+    <p class="note" style="margin:0">
+      点「Canvas2D（参照）」再点回「WebGL2」，对比同一套点云的耗时。<br />
+      把「设备像素比」拉到 2~3 最能看出差距 —— 点数越多、像素比越高，Canvas2D 越吃力。<br />
+      拖动「半径」可以观察 WebGL 侧的<b>密度自适应 alpha 修正</b>：半径越小、点越散，
+      修正倍数越高（实测范围 ×1.58 ~ ×1.90）。
+    </p>
+  </div>
+</div>
+
+<script type="module">
+import { createPointFigure } from '../src/point-figure.js';
+import { createCanvas2DFigure } from '../src/canvas2d-figure.js';
+import { makePoints, PALETTE } from './points.js';
+
+const cv = document.getElementById('cv');
+let cssW = 0, cssH = 0;
+let data = null, fig = null, mode = 'gl';
+let radius = 1.5, dprVal = 2;
+
+function stageSize() {
+  const host = document.getElementById('stage');
+  const w = Math.max(320, host.clientWidth);
+  const h = Math.max(320, Math.min(Math.round(window.innerHeight * 0.60), 600));
+  return [w, h];
+}
+
+function build() {
+  const [w, h] = stageSize();
+  cssW = w; cssH = h;
+  data = makePoints(w, h);
+  document.getElementById('npts').textContent = data.count.toLocaleString();
+  makeBackend();
+}
+
+function makeBackend() {
+  if (fig && fig.destroy) fig.destroy();
+  fig = null;
+
+  if (mode === 'gl') {
+    const f = createPointFigure({
+      canvas: cv, points: data.xy, palette: PALETTE,
+      radius: radius, alpha: 1, dpr: dprVal
+    });
+    if (f.isWebGL()) {
+      f.setPointColors(data.rgb, data.alpha);
+      fig = f;
+    } else if (f.destroy) f.destroy();
+  }
+
+  if (!fig) {
+    fig = createCanvas2DFigure({
+      canvas: cv, points: data.xy, palette: PALETTE,
+      radius: radius, dpr: dprVal
+    });
+    // Canvas2D 参照版：用同一套逐点颜色/alpha（通过包装 render 注入）
+    const baseRender = fig.render;
+    fig.render = function (xy) {
+      const ctx = cv.getContext('2d');
+      const P = xy || data.xy;
+      ctx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      ctx.globalCompositeOperation = 'source-over';
+      for (let i = 0; i < data.count; i++) {
+        ctx.beginPath();
+        ctx.arc(P[i * 2], P[i * 2 + 1], radius, 0, 6.2832);
+        ctx.fillStyle = 'rgba(' + data.rgb[i * 3] + ',' + data.rgb[i * 3 + 1] + ',' +
+          data.rgb[i * 3 + 2] + ',' + data.alpha[i].toFixed(3) + ')';
+        ctx.fill();
+      }
+    };
+  }
+
+  fig.resize(cssW, cssH);
+  document.getElementById('sBuf').textContent = cv.width + '×' + cv.height;
+  document.getElementById('sBack').textContent = (mode === 'gl' && fig.isWebGL && fig.isWebGL()) ? 'WebGL2' : 'Canvas2D';
+}
+
+/* ---------- 跑分：每帧真正重绘（点云轻微呼吸） ---------- */
+let running = false, rafId = 0, lastT = 0, dtList = [];
+const scratch = () => new Float32Array(data.xy.length);
+
+function loop(t) {
+  if (!running) return;
+  rafId = requestAnimationFrame(loop);
+  if (lastT) dtList.push(t - lastT);
+  lastT = t;
+  if (dtList.length > 100) dtList.shift();
+
+  const breathe = 1 + 0.035 * Math.sin(t / 640);
+  const xy = scratch();
+  for (let i = 0; i < data.xy.length; i += 2) {
+    const dx = data.xy[i] - cssW / 2, dy = data.xy[i + 1] - cssH / 2;
+    xy[i] = cssW / 2 + dx * breathe;
+    xy[i + 1] = cssH / 2 + dy * breathe;
+  }
+
+  const t0 = performance.now();
+  fig.render(xy);
+  const cost = performance.now() - t0;
+
+  document.getElementById('sFrame').textContent = cost.toFixed(2) + ' ms';
+  let sum = 0;
+  for (let i = 0; i < dtList.length; i++) sum += dtList[i];
+  const avg = dtList.length ? sum / dtList.length : 0;
+  document.getElementById('sFps').textContent = avg ? (1000 / avg).toFixed(0) + ' fps' : '—';
+}
+
+function startBench() { if (running) return; running = true; lastT = 0; dtList = []; rafId = requestAnimationFrame(loop); }
+function stopBench() {
+  running = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = 0;
+  document.getElementById('sFrame').textContent = '—';
+  document.getElementById('sFps').textContent = '—';
+}
+
+/* ---------- UI ---------- */
+function setButtons() {
+  document.getElementById('bGL').classList.toggle('on', mode === 'gl');
+  document.getElementById('bC2').classList.toggle('on', mode === 'c2');
+}
+function switchTo(m) {
+  mode = m; setButtons(); makeBackend();
+  if (running) { stopBench(); startBench(); } else { fig.render(); }
+}
+document.getElementById('bGL').onclick = () => switchTo('gl');
+document.getElementById('bC2').onclick = () => switchTo('c2');
+
+const radEl = document.getElementById('rad'), dprEl = document.getElementById('dpr');
+radEl.oninput = () => { radius = +radEl.value; document.getElementById('radV').textContent = radius.toFixed(2); makeBackend(); if (!running) fig.render(); };
+dprEl.oninput = () => { dprVal = +dprEl.value; document.getElementById('dprV').textContent = dprVal; makeBackend(); if (!running) fig.render(); };
+
+let rt = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(rt);
+  rt = setTimeout(() => {
+    const [w, h] = stageSize();
+    if (w === cssW && h === cssH) return;
+    build();
+    if (running) { stopBench(); startBench(); } else { fig.render(); }
+  }, 200);
+});
+
+/* ---------- 起 ---------- */
+build();
+setButtons();
+fig.render();
+
+const io = new IntersectionObserver((es) => {
+  es.forEach((e) => { if (e.isIntersecting) startBench(); else stopBench(); });
+}, { threshold: 0.15 });
+io.observe(document.getElementById('stage'));
+</script>
+</body>
+</html>
