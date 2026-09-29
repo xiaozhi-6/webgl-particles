@@ -13,8 +13,19 @@
 [![Zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#install)
 [![No build step](https://img.shields.io/badge/build-none-brightgreen.svg)](#install)
 
+<h3><a href="https://xiaozhi-6.github.io/webgl-particles/demo/interactive.html">▶ Interactive demo: a million particles follow the cursor</a></h3>
+<p>Move the mouse and the whole cloud is drawn towards it. <b>A pre-baked animation cannot respond
+to input, so the interaction is itself evidence that the frame is computed live.</b><br>
+The CPU-per-frame readout sits right next to the particle counter — drag the slider from 50k to
+1.5M and it stays near zero.</p>
+
 <h3><a href="https://xiaozhi-6.github.io/webgl-particles/demo/versus.html">▶ Open the side-by-side demo</a></h3>
 <p>Same frame, same point cloud, Canvas2D and WebGL2 rendering at once, each timed separately.</p>
+
+<sub>There is also a flow-field demo:
+<a href="https://xiaozhi-6.github.io/webgl-particles/demo/flowfield.html">flowfield.html</a>
+(multi-octave time-varying stream function plus curl noise; see
+<a href="docs/FINDINGS-flowfield.md">the flow-field notes</a>).</sub>
 
 **中文 · English · [Technical notes](docs/TECHNICAL.md) · [GPU cost structure](docs/FINDINGS-gpu-cost.md) · [Measurement pitfalls](docs/MEASUREMENT-PITFALLS.md) · [Integration](docs/INTEGRATION.md)**
 
