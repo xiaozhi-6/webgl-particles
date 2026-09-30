@@ -215,7 +215,7 @@ var DIFF = qnum('diff', 0.55);
 var DOT = qnum('dot', 1.6);
 var W = 1, H = 1, DPR = 1;
 var bufA = null, bufB = null, colBuf = null, alBuf = null, TF = null;
-var mouse = [0, 0], mouseOn = 0;
+var mouse = [0, 0], mouseOn = 0, lastMove = 0, pushFade = 0;
 
 /* 点大小随粒子数反向缩放：粒子少时点放大，视觉密度才一致。
    （这是"调粒子数就散"的正确解法 —— 靠波长不够，必须动半径） */
@@ -278,7 +278,18 @@ function frame(t, dt) {
   GL.uniform2f(U_SRES, W, H);
   GL.uniform1f(U_DT, Math.min(dt, 0.05));
   GL.uniform2f(U_MOUSE, mouse[0], mouse[1]);
-  GL.uniform1f(U_AT, mouseOn ? ATTRACT : ATTRACT * 0.10);
+  // ── 唯一的修复 ──
+  // 原来：mouseOn ? ATTRACT : ATTRACT * 0.10
+  //   鼠标离开后吸引力残留 10%，指向【冻结的鼠标坐标】。粒子被吸过去、
+  //   被 mod 传回画面另一侧、再被吸过去 —— 形成无限循环漂移。
+  //   用户原话："粒子就一直向上运动，然后又从下面出现又向上运动"。
+  //
+  // 现在：按【时间】判定活跃度（不依赖 mouseleave 事件是否可靠），
+  //   0.9 秒没有移动就衰减到 0。归零后粒子只按惯性漂散，不会被吸向幽灵点。
+  var active = (mouseOn && (performance.now() - lastMove) < 900) ? 1 : 0;
+  pushFade += (active - pushFade) * 0.06;
+  if (pushFade < 0.002) pushFade = 0;
+  GL.uniform1f(U_AT, ATTRACT * pushFade);
   GL.uniform1f(U_DIFF, DIFF);
 
   GL.bindTransformFeedback(GL.TRANSFORM_FEEDBACK, TF);
@@ -342,8 +353,10 @@ function loop(now) {
 }
 
 /* ---------------- 交互 ---------------- */
-function setMouse(x, y) { mouse[0] = x * DPR; mouse[1] = y * DPR; mouseOn = 1;
-  window.__dbgMouse = { x: x, y: y, dev: [mouse[0], mouse[1]], on: mouseOn, dpr: DPR }; }
+function setMouse(x, y) {
+  mouse[0] = x * DPR; mouse[1] = y * DPR;
+  mouseOn = 1; lastMove = performance.now();
+}
 window.addEventListener('mousemove', function (e) { setMouse(e.clientX, e.clientY); });
 window.addEventListener('mouseleave', function () { mouseOn = 0; });
 window.addEventListener('mousedown', function (e) { setMouse(e.clientX, e.clientY); });
