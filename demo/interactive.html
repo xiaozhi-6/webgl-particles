@@ -26,9 +26,6 @@
   .ctrl label{color:var(--dim);font-size:12px;display:flex;justify-content:space-between;gap:8px}
   .ctrl input[type=range]{width:100%;accent-color:var(--accent)}
   .ctrl .v{color:var(--fg);font-variant-numeric:tabular-nums}
-  .ctrl button{background:#1a1a2c;color:var(--fg);border:1px solid #33334d;border-radius:7px;
-    padding:6px 10px;cursor:pointer;font-size:12px;font-family:inherit}
-  .ctrl button.on{background:var(--accent);border-color:var(--accent);color:#06101f;font-weight:600}
   .hint{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:2;
     color:var(--dim);font-size:13px;pointer-events:none;text-align:center}
   .hint b{color:var(--accent)}
@@ -54,9 +51,6 @@
   <input id="rD" type="range" min="0" max="2" step="0.05" value="0.55" />
   <label>点大小 <span class="v" id="vS">1.60</span></label>
   <input id="rS" type="range" min="0.6" max="4" step="0.1" value="1.6" />
-  <label>粒子寿命 <span class="v" id="vL">6.0 s</span></label>
-  <input id="rL" type="range" min="1" max="20" step="0.5" value="6" />
-  <button id="btnBounds">边界：重生（无分身）</button>
 </div>
 
 <div class="probe">
@@ -109,14 +103,10 @@ function qnum(k, d) { var m = new RegExp('[?&]' + k + '=([-\\d.]+)').exec(locati
    ========================================================================== */
 var SIM_VS = [
   '#version 300 es',
-  // a_pos 现在是 vec3：xy = 位置，z = age。
-  // 单独的 'in float a_age' 实测一直读到 0（age 每帧从 0 累积），
-  // 所以把 age 并进已验证可用的位置属性，避开那个槽位问题。
-  'in vec3 a_pos; in vec2 a_vel; in vec2 a_seed; in float a_id;',
+  'in vec2 a_pos; in vec2 a_vel; in vec2 a_seed;',
   'uniform vec2 u_res; uniform float u_dt;',
   'uniform vec2 u_mouse; uniform float u_attract; uniform float u_diff;',
-  'uniform float u_dt2; uniform float u_life; uniform float u_bounds;',
-  'out vec3 v_pos3; out vec2 v_vel;',
+  'out vec2 v_pos; out vec2 v_vel;',
   '',
   'vec2 hash2(vec2 p) {',
   '  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));',
@@ -124,53 +114,26 @@ var SIM_VS = [
   '}',
   '',
   'void main() {',
-  '  vec2 p = a_pos.xy;',
+  '  vec2 p = a_pos;',
   '  vec2 v = a_vel;',
   '',
   // ---- 跟随：朝鼠标的弹簧力 ----
-  // ---- 年龄与重生（方案 C）----
-  // age 是随时间增长的状态变量，必须从【状态缓冲】读（a_age），
-  // 而不是从只读的种子缓冲读。之前写成 a_seed.z 是个概念错误：
-  // 那样每帧读到的都是初始随机值，重生判断完全乱套。
-  '  float age = a_pos.z;',
-  '  age += u_dt;',
-  '  if (u_bounds > 0.5) {',
-  '    if (age >= u_life) {',
-      // 用粒子 id 的黄金比低差异序列做重生位置，而不是 hash。
-      // 原因：fract(sin(...)*43758.5453) 这类 hash 在 GPU 浮点精度下对不同
-      // 种子会给出相同结果 —— 实测 30 万粒子全部重生到同一点，age 也完全相同。
-      // 低差异序列不受精度影响，而且分布更均匀。
-  '      float gid = a_id + 1.0;',
-  '      p = vec2(fract(gid * 0.6180339887), fract(gid * 0.7548776662)) * u_res;',
-  '      v = vec2(0.0);',
-  '      age = 0.0;',
-  '    }',
-  '  }',
-  '',
   '  vec2 toM = u_mouse - p;',
   '  float dm = length(toM) + 1e-4;',
   '  vec2 dirM = toM / dm;',
   // 近距离时减弱，避免所有粒子塌成一点（那样反而不好看，也看不出"跟随"）
-  // 【修塌缩】原为 smoothstep(6,90,dm)，只让力变弱、不反向，
-  // 光标附近没有平衡半径 -> 粒子塌成一点（实测包围盒宽高为 0）。
-  // 现在：距光标小于 RING 往外推，大于 RING 往里收 -> 稳定环。
-  // 这是分段恒力，和弹性的边界碰撞是同一个数学形式。
-  '  float RING = 90.0;',
-  '  float wv = dm - RING;',
-  '  float sgn = (wv >= 0.0) ? 1.0 : -1.0;',
-  '  float near = min(abs(wv) / 55.0, 1.0);',
-  '  float far = 1.0 - smoothstep(220.0, 360.0, dm);',
-  '  v += dirM * sgn * near * far * u_attract * 0.75;',
+  '  float near = smoothstep(6.0, 90.0, dm);',
+  '  v += dirM * near * u_attract * 0.55;',
   // 切向分量：让粒子绕着鼠标转，而不是直接撞上去
-  '  v += vec2(-dirM.y, dirM.x) * near * far * u_attract * 0.22;',
+  '  v += vec2(-dirM.y, dirM.x) * near * u_attract * 0.28;',
   '',
   // ---- 无散度涡流：让运动有结构、不呆板 ----
   '  vec2 q = p * 0.0042;',
-  '  vec2 nn = hash2(floor(q) + floor(a_seed.xy * 37.0));',
+  '  vec2 nn = hash2(floor(q) + floor(a_seed * 37.0));',
   '  v += vec2(-nn.y, nn.x) * 0.10;',
   '',
   // ---- 扩散：随机扰动，避免"轨道感" ----
-  '  v += hash2(p * 0.017 + a_seed.xy * 11.0) * u_diff * 0.45;',
+  '  v += hash2(p * 0.017 + a_seed * 11.0) * u_diff * 0.45;',
   '',
   // ---- 阻尼 + 边界收束 ----
   '  v *= 0.94;',
@@ -182,17 +145,8 @@ var SIM_VS = [
   '  if (rc > 0.98) { v -= normalize(dc + 1e-6) * (rc - 0.98) * 6.0; }',
   '',
   '  p += v * min(u_dt * 60.0, 2.0);',
-  // 重生模式不 wrap（避免分身），用边界反弹兜底；wrap 模式保持原样。
-  '  if (u_bounds > 0.5) {',
-  '    if (p.x < 0.0)        { p.x = 0.0;        v.x =  abs(v.x) * 0.5; }',
-  '    if (p.y < 0.0)        { p.y = 0.0;        v.y =  abs(v.y) * 0.5; }',
-  '    if (p.x > u_res.x)    { p.x = u_res.x;    v.x = -abs(v.x) * 0.5; }',
-  '    if (p.y > u_res.y)    { p.y = u_res.y;    v.y = -abs(v.y) * 0.5; }',
-  '    p = clamp(p, vec2(0.0), u_res);',
-  '  } else {',
-  '    p = mod(p + u_res, u_res);',
-  '  }',
-  '  v_pos3 = vec3(p, age); v_vel = v;',
+  '  p = mod(p + u_res, u_res);',
+  '  v_pos = p; v_vel = v;',
   '  gl_Position = vec4(0.0);',
   '}'].join('\n');
 
@@ -230,7 +184,7 @@ if (!sv || !sf || !dv || !df) return;
 
 var SP = GL.createProgram();
 GL.attachShader(SP, sv); GL.attachShader(SP, sf);
-GL.transformFeedbackVaryings(SP, ['v_pos3', 'v_vel'], GL.INTERLEAVED_ATTRIBS);
+GL.transformFeedbackVaryings(SP, ['v_pos', 'v_vel'], GL.INTERLEAVED_ATTRIBS);
 GL.linkProgram(SP);
 if (!GL.getProgramParameter(SP, GL.LINK_STATUS)) { err('sim link: ' + GL.getProgramInfoLog(SP)); return; }
 
@@ -246,12 +200,10 @@ GL.enable(GL.BLEND);
 GL.blendFuncSeparate(GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA, GL.ONE, GL.ONE_MINUS_SRC_ALPHA);
 
 var L_SP = GL.getAttribLocation(SP, 'a_pos'), L_SV = GL.getAttribLocation(SP, 'a_vel'),
-    L_SS = GL.getAttribLocation(SP, 'a_seed'),
-    L_SI = GL.getAttribLocation(SP, 'a_id');
+    L_SS = GL.getAttribLocation(SP, 'a_seed');
 var U_SRES = GL.getUniformLocation(SP, 'u_res'), U_DT = GL.getUniformLocation(SP, 'u_dt'),
     U_MOUSE = GL.getUniformLocation(SP, 'u_mouse'), U_AT = GL.getUniformLocation(SP, 'u_attract'),
-    U_DIFF = GL.getUniformLocation(SP, 'u_diff'), U_DT2 = GL.getUniformLocation(SP, 'u_dt2'),
-    U_LIFE = GL.getUniformLocation(SP, 'u_life'), U_BOUNDS = GL.getUniformLocation(SP, 'u_bounds');
+    U_DIFF = GL.getUniformLocation(SP, 'u_diff');
 var LC = GL.getAttribLocation(DP, 'a_corner'), L_DP = GL.getAttribLocation(DP, 'a_pos'),
     L_DC = GL.getAttribLocation(DP, 'a_col'), L_DA = GL.getAttribLocation(DP, 'a_al');
 var U_RES = GL.getUniformLocation(DP, 'u_res'), U_RAD = GL.getUniformLocation(DP, 'u_rad'),
@@ -261,18 +213,9 @@ var N = Math.round(qnum('n', 300000));
 var ATTRACT = qnum('attract', 1.0);
 var DIFF = qnum('diff', 0.55);
 var DOT = qnum('dot', 1.6);
-var LIFETIME = qnum('life', 6.0);
-// bounds: respawn(默认) | wrap
-// 默认用 wrap：寿命+重生功能目前有 bug（粒子会消失），先默认关闭。
-// 想要试重生可以加 ?bounds=respawn。
-var BOUNDS = /[?&]bounds=respawn/.test(location.search) ? 1.0 : 0.0;
 var W = 1, H = 1, DPR = 1;
-var bufA = null, bufB = null, colBuf = null, alBuf = null, seedBuf = null, idBuf = null, TF = null;
-// 鼠标坐标初始必须放在画面内。
-// 之前设成 [-9999,-9999]，导致环力的方向对每个粒子都是同一个巨大的
-// '向外'，所有粒子被推到同一个角落并收敛到同一点（实测 30 万粒子全部
-// 堆在 (975.4, 28.3)，包围盒为 0）。
-var mouse = [0, 0], mouseOn = 0, lastMove = 0, pushFade = 0;
+var bufA = null, bufB = null, colBuf = null, alBuf = null, TF = null;
+var mouse = [0, 0], mouseOn = 0;
 
 /* 点大小随粒子数反向缩放：粒子少时点放大，视觉密度才一致。
    （这是"调粒子数就散"的正确解法 —— 靠波长不够，必须动半径） */
@@ -289,17 +232,13 @@ function cappedDPR() {
 }
 
 function allocState(n) {
-  [bufA, bufB, colBuf, alBuf, seedBuf, idBuf].forEach(function (b) { if (b) GL.deleteBuffer(b); });
+  [bufA, bufB, colBuf, alBuf].forEach(function (b) { if (b) GL.deleteBuffer(b); });
   if (TF) GL.deleteTransformFeedback(TF);
   bufA = GL.createBuffer(); bufB = GL.createBuffer();
-  colBuf = GL.createBuffer(); alBuf = GL.createBuffer(); seedBuf = GL.createBuffer();
-  idBuf = GL.createBuffer();
+  colBuf = GL.createBuffer(); alBuf = GL.createBuffer();
   TF = GL.createTransformFeedback();
 
-  // 状态 5 个 float：[pos.x, pos.y, vel.x, vel.y, age] -> stride 20 字节
-  var st = new Float32Array(n * 5), col = new Float32Array(n * 3), al = new Float32Array(n);
-  var seed = new Float32Array(n * 2);
-  var ids = new Float32Array(n);
+  var st = new Float32Array(n * 4), col = new Float32Array(n * 3), al = new Float32Array(n);
   var s = 20261108;
   function rnd() { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }
   var pal = [[0.62,0.72,1.0],[0.48,0.56,0.94],[0.82,0.88,1.0],[0.42,0.50,0.82],[0.96,0.86,0.60]];
@@ -307,74 +246,22 @@ function allocState(n) {
   var cx = W * 0.5, cy = H * 0.5;
   for (var i = 0; i < n; i++) {
     var a = rnd() * 6.2831853, rr = Math.pow(rnd(), 0.45) * Math.min(W, H) * 0.47;
-    st[i*5]   = cx + Math.cos(a) * rr;
-    st[i*5+1] = cy + Math.sin(a) * rr;
-    st[i*5+2] = (rnd() - 0.5) * 0.6;
-    st[i*5+3] = (rnd() - 0.5) * 0.6;
-    // age 从随机值起步，避免所有粒子同时重生（会在画面上出现周期性闪烁）
-    st[i*5+4] = rnd() * 6.0;
-    seed[i*2]   = rnd();
-    seed[i*2+1] = rnd();
-    ids[i] = i;
+    st[i*4]   = cx + Math.cos(a) * rr;
+    st[i*4+1] = cy + Math.sin(a) * rr;
+    st[i*4+2] = (rnd() - 0.5) * 0.6;
+    st[i*4+3] = (rnd() - 0.5) * 0.6;
     var c = pal[(rnd()*pal.length)|0];
     col[i*3] = c[0]; col[i*3+1] = c[1]; col[i*3+2] = c[2];
     al[i] = 0.55 + rnd() * 0.45;
   }
   GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
   GL.bufferData(GL.ARRAY_BUFFER, st, GL.DYNAMIC_COPY);
-
-  // ── 诊断：立刻读回 GPU 上的 bufA，验证初始 age 是否分散 ──
-  try {
-    var chk = new Float32Array(10 * 5);
-    GL.getBufferSubData(GL.ARRAY_BUFFER, 0, chk);
-    var ages = [];
-    for (var q2 = 0; q2 < 10; q2++) ages.push(+chk[q2*5+4].toFixed(3));
-    var uniq = {};
-    for (var q3 = 0; q3 < 10; q3++) uniq[ages[q3]] = 1;
-    window.__postUpload = {
-      agesAtUpload: ages,
-      distinctIn10: Object.keys(uniq).length,
-      n: n,
-      cpuAges: [+st[4].toFixed(3), +st[9].toFixed(3), +st[14].toFixed(3)]
-    };
-  } catch (e) {
-    window.__postUpload = { error: String(e.message) };
-  }
   GL.bindBuffer(GL.ARRAY_BUFFER, bufB);
-  GL.bufferData(GL.ARRAY_BUFFER, n * 20, GL.DYNAMIC_COPY);
-  // 【关键修复】把 bufA 的内容复制到 bufB。
-  //
-  // 原因：状态是 transform feedback 的 ping-pong —— 第 1 帧【读 bufA、写 bufB】，
-  // 然后交换。如果 bufB 是全新未初始化的缓冲，第 1 帧写入的是有效数据，
-  // 但交换后第 2 帧会去读那个【空缓冲】，粒子就拿到垃圾坐标。
-  //
-  // 初始加载时这个 bug 被掩盖了（那次 bufB 恰好是刚创建、还没被读过），
-  // 但每次触发 allocState（改粒子数）都会重现 —— 这就是
-  // "一调粒子数粒子就没了" 的真正原因。
-  GL.bindBuffer(GL.COPY_READ_BUFFER, bufA);
-  GL.bindBuffer(GL.COPY_WRITE_BUFFER, bufB);
-  GL.bufferSubData(GL.COPY_WRITE_BUFFER, 0, st);
-  GL.bindBuffer(GL.COPY_READ_BUFFER, null);
-  GL.bindBuffer(GL.COPY_WRITE_BUFFER, null);
+  GL.bufferData(GL.ARRAY_BUFFER, n * 16, GL.DYNAMIC_COPY);
   GL.bindBuffer(GL.ARRAY_BUFFER, colBuf);
   GL.bufferData(GL.ARRAY_BUFFER, col, GL.STATIC_DRAW);
   GL.bindBuffer(GL.ARRAY_BUFFER, alBuf);
   GL.bufferData(GL.ARRAY_BUFFER, al, GL.STATIC_DRAW);
-  GL.bindBuffer(GL.ARRAY_BUFFER, seedBuf);
-  GL.bufferData(GL.ARRAY_BUFFER, seed, GL.STATIC_DRAW);
-  GL.bindBuffer(GL.ARRAY_BUFFER, idBuf);
-  GL.bufferData(GL.ARRAY_BUFFER, ids, GL.STATIC_DRAW);
-
-  // ── 诊断：记录"创建那一刻"的 CPU 侧数组（frames 还没跑过）──
-  window.__initLog = {
-    n: n, W: W, H: H, nW: window.innerWidth, nH: window.innerHeight,
-    cpu: [
-      'st[0] = ' + st[0].toFixed(1) + ',' + st[1].toFixed(1) + ' age ' + st[4].toFixed(2),
-      'st[5] = ' + st[5].toFixed(1) + ',' + st[6].toFixed(1) + ' age ' + st[9].toFixed(2),
-      'st[10]= ' + st[10].toFixed(1) + ',' + st[11].toFixed(1),
-      'st[15]= ' + st[15].toFixed(1) + ',' + st[16].toFixed(1)
-    ]
-  };
 }
 
 function resize() {
@@ -391,46 +278,19 @@ function frame(t, dt) {
   GL.uniform2f(U_SRES, W, H);
   GL.uniform1f(U_DT, Math.min(dt, 0.05));
   GL.uniform2f(U_MOUSE, mouse[0], mouse[1]);
-  // ── 唯一的修复 ──
-  // 原来：mouseOn ? ATTRACT : ATTRACT * 0.10
-  //   鼠标离开后吸引力残留 10%，指向【冻结的鼠标坐标】。粒子被吸过去、
-  //   被 mod 传回画面另一侧、再被吸过去 —— 形成无限循环漂移。
-  //   用户原话："粒子就一直向上运动，然后又从下面出现又向上运动"。
-  //
-  // 现在：按【时间】判定活跃度（不依赖 mouseleave 事件是否可靠），
-  //   0.9 秒没有移动就衰减到 0。归零后粒子只按惯性漂散，不会被吸向幽灵点。
-  var active = (mouseOn && (performance.now() - lastMove) < 900) ? 1 : 0;
-  pushFade += (active - pushFade) * 0.06;
-  if (pushFade < 0.002) pushFade = 0;
-  // 鼠标不在/停住时力严格为 0（不是 10%）。
-  // 残留会让粒子被吸向冻结的坐标，形成幽灵吸引子与无限漂移。
-  GL.uniform1f(U_AT, ATTRACT * pushFade);   // pushFade 会被精确归零
+  GL.uniform1f(U_AT, mouseOn ? ATTRACT : ATTRACT * 0.10);
   GL.uniform1f(U_DIFF, DIFF);
-  GL.uniform1f(U_LIFE, LIFETIME);
-  GL.uniform1f(U_BOUNDS, BOUNDS);
 
   GL.bindTransformFeedback(GL.TRANSFORM_FEEDBACK, TF);
   GL.bindBufferBase(GL.TRANSFORM_FEEDBACK_BUFFER, 0, bufB);
   GL.enable(GL.RASTERIZER_DISCARD);
   GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
-  // a_pos 是 vec3：pos.x, pos.y, age（stride 20）
   GL.enableVertexAttribArray(L_SP); GL.vertexAttribDivisor(L_SP, 0);
-  GL.vertexAttribPointer(L_SP, 3, GL.FLOAT, false, 20, 0);
+  GL.vertexAttribPointer(L_SP, 2, GL.FLOAT, false, 16, 0);
   GL.enableVertexAttribArray(L_SV); GL.vertexAttribDivisor(L_SV, 0);
-  GL.vertexAttribPointer(L_SV, 2, GL.FLOAT, false, 20, 8);
-  // seed 必须来自【独立的静态缓冲】，不能复用位置数据：
-  // 种子若跟着位置变，随机力在时间上就相关了，会累积成系统性漂移。
-  // 这里第三维是 age（vec3 的 z），由模板反馈每帧写回。
-  // a_age 从状态缓冲的 offset 16 读（状态是 [pos.xy, vel.xy, age] = 20 字节）
-
-  // age 已并入 a_pos.z，这里不再需要单独属性
-  // a_seed 来自独立的静态缓冲，只读（每粒子固定，避免随机力在时间上相关）
-  GL.bindBuffer(GL.ARRAY_BUFFER, seedBuf);
+  GL.vertexAttribPointer(L_SV, 2, GL.FLOAT, false, 16, 8);
   GL.enableVertexAttribArray(L_SS); GL.vertexAttribDivisor(L_SS, 1);
-  GL.vertexAttribPointer(L_SS, 2, GL.FLOAT, false, 8, 0);
-  GL.bindBuffer(GL.ARRAY_BUFFER, idBuf);
-  GL.enableVertexAttribArray(L_SI); GL.vertexAttribDivisor(L_SI, 1);
-  GL.vertexAttribPointer(L_SI, 1, GL.FLOAT, false, 4, 0);
+  GL.vertexAttribPointer(L_SS, 2, GL.FLOAT, false, 16, 0);   // 复用 pos 当 seed（稳定即可）
   GL.beginTransformFeedback(GL.POINTS);
   GL.drawArrays(GL.POINTS, 0, N);
   GL.endTransformFeedback();
@@ -446,7 +306,7 @@ function frame(t, dt) {
   GL.vertexAttribPointer(LC, 2, GL.FLOAT, false, 0, 0);
   GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
   GL.enableVertexAttribArray(L_DP); GL.vertexAttribDivisor(L_DP, 1);
-  GL.vertexAttribPointer(L_DP, 2, GL.FLOAT, false, 20, 0);   // 绘制只需 pos.xy
+  GL.vertexAttribPointer(L_DP, 2, GL.FLOAT, false, 16, 0);
   GL.bindBuffer(GL.ARRAY_BUFFER, colBuf);
   GL.enableVertexAttribArray(L_DC); GL.vertexAttribDivisor(L_DC, 1);
   GL.vertexAttribPointer(L_DC, 3, GL.FLOAT, false, 0, 0);
@@ -466,7 +326,6 @@ var last = performance.now(), t0 = last, frames = 0, accCpu = 0;
 var pFps = document.getElementById('pFps'), pCpu = document.getElementById('pCpu'), pN = document.getElementById('pN');
 function loop(now) {
   requestAnimationFrame(loop);
-  window.__frames = (window.__frames || 0) + 1;
   var dt = (now - last) / 1000; last = now;
   if (dt > 0.25) dt = 0.016;
   var t = (now - t0) / 1000;
@@ -483,10 +342,8 @@ function loop(now) {
 }
 
 /* ---------------- 交互 ---------------- */
-function setMouse(x, y) {
-  mouse[0] = x * DPR; mouse[1] = y * DPR;
-  mouseOn = 1; lastMove = performance.now();
-}
+function setMouse(x, y) { mouse[0] = x * DPR; mouse[1] = y * DPR; mouseOn = 1;
+  window.__dbgMouse = { x: x, y: y, dev: [mouse[0], mouse[1]], on: mouseOn, dpr: DPR }; }
 window.addEventListener('mousemove', function (e) { setMouse(e.clientX, e.clientY); });
 window.addEventListener('mouseleave', function () { mouseOn = 0; });
 window.addEventListener('mousedown', function (e) { setMouse(e.clientX, e.clientY); });
@@ -501,9 +358,6 @@ window.addEventListener('touchend', function () { mouseOn = 0; });
 window.addEventListener('resize', function () {
   var ow = W, oh = H;
   resize();
-  // 窗口变化后把鼠标坐标夹回画面内，否则环力方向会被一个离屏坐标带偏
-  mouse[0] = Math.min(mouse[0], W * DPR);
-  mouse[1] = Math.min(mouse[1], H * DPR);
   if (ow !== W || oh !== H) allocState(N);
 });
 
@@ -523,218 +377,29 @@ rA.oninput = function () { ATTRACT = +rA.value; vA.textContent = ATTRACT.toFixed
 rD.oninput = function () { DIFF = +rD.value; vD.textContent = DIFF.toFixed(2); };
 rS.oninput = function () { DOT = +rS.value; vS.textContent = DOT.toFixed(2); };
 
-var rL = document.getElementById('rL'), vL = document.getElementById('vL');
-rL.value = Math.max(1, Math.min(20, LIFETIME));
-vL.textContent = LIFETIME.toFixed(1) + ' s';
-rL.oninput = function () { LIFETIME = +rL.value; vL.textContent = LIFETIME.toFixed(1) + ' s'; };
-
-// 边界模式切换：重生（无分身）<-> wrap（原方案）
-var btnBounds = document.getElementById('btnBounds');
-function syncBoundsBtn() {
-  var b = BOUNDS > 0.5;
-  btnBounds.classList.toggle('on', b);
-  btnBounds.textContent = '边界：' + (b ? '重生（实验，有 bug）' : 'wrap（稳定）');
-}
-syncBoundsBtn();
-btnBounds.onclick = function () {
-  BOUNDS = BOUNDS > 0.5 ? 0.0 : 1.0;
-  syncBoundsBtn();
-};
-
 /* ---------------- 起动 ---------------- */
 resize();
-mouse[0] = W * DPR * 0.5; mouse[1] = H * DPR * 0.5;   // 画布中心
+mouse[0] = W * DPR * 0.5; mouse[1] = H * DPR * 0.5;
 mouseOn = 0;
 allocState(N);
 requestAnimationFrame(loop);
-window.__frames = 0;
 window.__ready = true;
-
-/* 报告顶点属性状态（注意：属性能否被查询取决于实现，失败就返回错误） */
-window.__attrProbe = function () {
-  function q(loc, name) {
-    var o = { name: name, loc: loc };
-    try { o.enabled = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_ENABLED); } catch (e) { o.enabled = 'ERR'; }
-    try { o.size = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_SIZE); } catch (e) {}
-    try { o.stride = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_STRIDE); } catch (e) {}
-    try { o.type = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_TYPE); } catch (e) {}
-    try { o.divisor = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_DIVISOR); } catch (e) {}
-    try { o.offset = GL.getVertexAttribOffset(loc, GL.VERTEX_ATTRIB_ARRAY_POINTER); } catch (e) {}
-    try { o.buf = !!GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING); } catch (e) {}
-    return o;
-  }
-  return JSON.stringify({
-    curProgramIsSP: GL.getParameter(GL.CURRENT_PROGRAM) === SP,
-    attribs: [q(L_SP, 'a_pos'), q(L_SV, 'a_vel'), q(L_SA, 'a_age'), q(L_SS, 'a_seed'), q(L_SI, 'a_id')],
-    err: GL.getError()
-  });
-};
-
-/* 实验：把 a_age 的数据源换成 idBuf（值 0..N-1），看 age 是否变分散 */
-window.__attrSwap = function () {
-  GL.bindBuffer(GL.ARRAY_BUFFER, idBuf);
-  GL.enableVertexAttribArray(L_SA);
-  GL.vertexAttribDivisor(L_SA, 1);
-  GL.vertexAttribPointer(L_SA, 1, GL.FLOAT, false, 4, 0);
-  return 'swapped a_age source -> idBuf (值 0..N-1)';
-};
-
-/* age 分布跟踪：用于定位"粒子几秒后全死" */
-window.__ageStats = function () {
-  var n = N;
-  var f = new Float32Array(n * 5);
+window.__probe = function(){
+  var buf = new Float32Array(N * 4);
   GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
-  GL.getBufferSubData(GL.ARRAY_BUFFER, 0, f);
-  var bins = new Array(12);
-  for (var z = 0; z < 12; z++) bins[z] = 0;
-  var minA = 1e9, maxA = -1e9, sumA = 0, nan = 0, off = 0;
-  for (var i = 0; i < n; i++) {
-    var ag = f[i*5+4], x = f[i*5], y = f[i*5+1];
-    if (!isFinite(ag) || !isFinite(x) || !isFinite(y)) { nan++; continue; }
-    if (ag < minA) minA = ag;
-    if (ag > maxA) maxA = ag;
-    sumA += ag;
-    bins[Math.min(11, Math.max(0, Math.floor(ag)))]++;
-    if (x < -1 || x > W+1 || y < -1 || y > H+1) off++;
+  GL.getBufferSubData(GL.ARRAY_BUFFER, 0, buf);
+  var minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,vmax=0,vsum=0,nan=0;
+  for (var i=0;i<N;i++){
+    var x=buf[i*4], y=buf[i*4+1], vx=buf[i*4+2], vy=buf[i*4+3];
+    if(!isFinite(x)||!isFinite(y)){nan++;continue;}
+    if(x<minx)minx=x; if(x>maxx)maxx=x;
+    if(y<miny)miny=y; if(y>maxy)maxy=y;
+    var vv=Math.hypot(vx,vy); if(vv>vmax)vmax=vv; vsum+=vv;
   }
-  return JSON.stringify({
-    t: +(performance.now()/1000).toFixed(1),
-    frames: window.__frames || 0,
-    minA: +minA.toFixed(2), maxA: +maxA.toFixed(2), avgA: +(sumA/n).toFixed(2),
-    nan: nan, offscreen: off, bins: bins,
-    N: n, life: LIFETIME, bounds: BOUNDS, W: W, H: H
-  });
-};
-
-/* ═════ 诊断钩子（只在被调用时执行，无运行时开销）═════ */
-window.__dbg2 = function () {
-  function nm(x) { return x === undefined ? 'undefined' : x; }
-  return JSON.stringify({
-    'attr sim a_pos': nm(typeof L_SP !== 'undefined' ? L_SP : undefined),
-    'attr sim a_vel': nm(typeof L_SV !== 'undefined' ? L_SV : undefined),
-    'attr sim a_age': nm(typeof L_SA !== 'undefined' ? L_SA : undefined),
-    'attr sim a_seed': nm(typeof L_SS !== 'undefined' ? L_SS : undefined),
-    'attr sim a_id': nm(typeof L_SI !== 'undefined' ? L_SI : undefined),
-    'attr draw a_corner': nm(typeof LC !== 'undefined' ? LC : undefined),
-    'attr draw a_pos': nm(typeof L_DP !== 'undefined' ? L_DP : undefined),
-    N: N, W: W, H: H, DPR: DPR,
-    strideState: 20, strideSeed: 8, strideId: 4,
-    hasSeedBuf: !!seedBuf, hasIdBuf: !!idBuf,
-    LIFETIME: LIFETIME, BOUNDS: BOUNDS, PUSH: (typeof PUSH !== 'undefined' ? PUSH : 'n/a')
-  });
-};
-
-/* 重建后立刻读一次状态缓冲（验证初始化是否写对了） */
-window.__dbgInit = function () {
-  var n = Math.min(N, 6);
-  var f = new Float32Array(n * 5);
-  GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
-  GL.getBufferSubData(GL.ARRAY_BUFFER, 0, f);
-  var out = [];
-  for (var i = 0; i < n; i++) {
-    out.push('[' + i + '] p(' + f[i*5].toFixed(1) + ',' + f[i*5+1].toFixed(1) +
-             ') v(' + f[i*5+2].toFixed(3) + ',' + f[i*5+3].toFixed(3) +
-             ') age ' + f[i*5+4].toFixed(3));
-  }
-  // 也读 seed 与 id
-  var sd = new Float32Array(8);
-  GL.bindBuffer(GL.ARRAY_BUFFER, seedBuf);
-  GL.getBufferSubData(GL.ARRAY_BUFFER, 0, sd);
-  var idb = new Float32Array(8);
-  GL.bindBuffer(GL.ARRAY_BUFFER, idBuf);
-  GL.getBufferSubData(GL.ARRAY_BUFFER, 0, idb);
-  return JSON.stringify({
-    state: out,
-    seed: Array.prototype.slice.call(sd).map(function (x) { return +x.toFixed(3); }),
-    id: Array.prototype.slice.call(idb)
-  });
-};
-
-/* ═══════ 调试接口（生产可留，开销为零，只在被调用时执行）═══════ */
-window.__dbg = {
-  /* 直接 dump 状态缓冲的原始内容 */
-  raw: function () {
-    var n = N;
-    var f = new Float32Array(n * 5);
-    GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
-    GL.getBufferSubData(GL.ARRAY_BUFFER, 0, f);
-    var badAge = 0, badVel = 0, maxV = 0, maxAge = 0, sumV = 0, nanPos = 0;
-    for (var i = 0; i < n; i++) {
-      var x = f[i*5], y = f[i*5+1], vx = f[i*5+2], vy = f[i*5+3], ag = f[i*5+4];
-      if (!isFinite(x) || !isFinite(y)) { nanPos++; continue; }
-      var vv = Math.sqrt(vx*vx + vy*vy);
-      sumV += vv;
-      if (vv > maxV) maxV = vv;
-      if (ag > maxAge) maxAge = ag;
-      if (!isFinite(ag) || ag < 0 || ag > 60) badAge++;
-      if (!isFinite(vv) || vv > 6.5) badVel++;
-    }
-    var head = [];
-    for (var k = 0; k < 6; k++) {
-      head.push('p(' + f[k*5].toFixed(1) + ',' + f[k*5+1].toFixed(1) + ') v(' +
-                f[k*5+2].toFixed(3) + ',' + f[k*5+3].toFixed(3) + ') age ' + f[k*5+4].toFixed(2));
-    }
-    return JSON.stringify({
-      N: n, W: W, H: H,
-      vavg: +(sumV / Math.max(n,1)).toFixed(3), vmax: +maxV.toFixed(3),
-      maxAge: +maxAge.toFixed(2),
-      badAge: badAge, badVel: badVel, nanPos: nanPos,
-      life: LIFETIME, bounds: BOUNDS, attract: ATTRACT, diff: DIFF,
-      head: head
-    });
-  },
-  /* age 统计：定位"粒子几秒后消失" */
-  ages: function () {
-    var n = N;
-    var f = new Float32Array(n * 5);
-    GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
-    GL.getBufferSubData(GL.ARRAY_BUFFER, 0, f);
-    var bins = new Array(12);
-    for (var z = 0; z < 12; z++) bins[z] = 0;
-    var minA = 1e9, maxA = -1e9, sumA = 0, nan = 0, off = 0;
-    for (var i = 0; i < n; i++) {
-      var ag = f[i*5+4], x = f[i*5], y = f[i*5+1];
-      if (!isFinite(ag) || !isFinite(x) || !isFinite(y)) { nan++; continue; }
-      if (ag < minA) minA = ag;
-      if (ag > maxA) maxA = ag;
-      sumA += ag;
-      bins[Math.min(11, Math.max(0, Math.floor(ag)))]++;
-      if (x < -1 || x > W+1 || y < -1 || y > H+1) off++;
-    }
-    return JSON.stringify({ frames: window.__frames || 0,
-      minA: +minA.toFixed(3), maxA: +maxA.toFixed(3), avgA: +(sumA/n).toFixed(3),
-      nan: nan, offscreen: off, bins: bins, N: n,
-      life: LIFETIME, bounds: BOUNDS, W: W, H: H });
-  },
-
-  /* 空间分布：4x4 直方图 */
-  grid: function () {
-    var f = new Float32Array(N * 5);
-    GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
-    GL.getBufferSubData(GL.ARRAY_BUFFER, 0, f);
-    var G = 4, g = new Array(G*G);
-    for (var z = 0; z < G*G; z++) g[z] = 0;
-    for (var i = 0; i < N; i++) {
-      var x = f[i*5], y = f[i*5+1];
-      if (!isFinite(x) || !isFinite(y)) continue;
-      var gi = Math.min(G-1, Math.max(0, Math.floor(x / W * G)));
-      var gj = Math.min(G-1, Math.max(0, Math.floor(y / H * G)));
-      g[gj*G+gi]++;
-    }
-    return JSON.stringify({ grid: g });
-  }
-};
-window.__probe = function () {
-  // 薄封装：复用 __dbg.raw()，避免两套实现给出互相矛盾的数字。
-  // 旧实现按 stride 16 读状态，而状态实际是 20 字节/粒子（pos.xy, vel.xy, age），
-  // 所以它读出的 vavg 完全错误（曾报 296，实际约 1.0），会误导所有后续测量。
-  if (!window.__dbg) return 'no __dbg';
-  var r = JSON.parse(window.__dbg.raw());
-  var g = JSON.parse(window.__dbg.grid());
-  var mx = Math.max.apply(null, g.grid), mn = Math.min.apply(null, g.grid);
-  r.grid = g.grid;
-  r.uniformity = mx > 0 ? +(mn / mx).toFixed(3) : 0;
-  return JSON.stringify(r);
+  return JSON.stringify({N:N, x:[+minx.toFixed(1),+maxx.toFixed(1)], y:[+miny.toFixed(1),+maxy.toFixed(1)],
+    vmax:+vmax.toFixed(2), vavg:+(vsum/N).toFixed(3), nan:nan,
+    mouse:[+mouse[0].toFixed(1),+mouse[1].toFixed(1)], on:mouseOn,
+    ATTRACT:ATTRACT, DIFF:DIFF, W:W, H:H, RAD:+dotFor(N).toFixed(2)});
 };
 })();
 </script>
