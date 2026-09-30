@@ -109,11 +109,14 @@ function qnum(k, d) { var m = new RegExp('[?&]' + k + '=([-\\d.]+)').exec(locati
    ========================================================================== */
 var SIM_VS = [
   '#version 300 es',
-  'in vec2 a_pos; in vec2 a_vel; in float a_age; in vec2 a_seed; in float a_id;',
+  // a_pos 现在是 vec3：xy = 位置，z = age。
+  // 单独的 'in float a_age' 实测一直读到 0（age 每帧从 0 累积），
+  // 所以把 age 并进已验证可用的位置属性，避开那个槽位问题。
+  'in vec3 a_pos; in vec2 a_vel; in vec2 a_seed; in float a_id;',
   'uniform vec2 u_res; uniform float u_dt;',
   'uniform vec2 u_mouse; uniform float u_attract; uniform float u_diff;',
   'uniform float u_dt2; uniform float u_life; uniform float u_bounds;',
-  'out vec2 v_pos; out vec2 v_vel; out float v_age;',
+  'out vec3 v_pos3; out vec2 v_vel;',
   '',
   'vec2 hash2(vec2 p) {',
   '  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));',
@@ -121,7 +124,7 @@ var SIM_VS = [
   '}',
   '',
   'void main() {',
-  '  vec2 p = a_pos;',
+  '  vec2 p = a_pos.xy;',
   '  vec2 v = a_vel;',
   '',
   // ---- 跟随：朝鼠标的弹簧力 ----
@@ -129,7 +132,7 @@ var SIM_VS = [
   // age 是随时间增长的状态变量，必须从【状态缓冲】读（a_age），
   // 而不是从只读的种子缓冲读。之前写成 a_seed.z 是个概念错误：
   // 那样每帧读到的都是初始随机值，重生判断完全乱套。
-  '  float age = a_age;',
+  '  float age = a_pos.z;',
   '  age += u_dt;',
   '  if (u_bounds > 0.5) {',
   '    if (age >= u_life) {',
@@ -189,7 +192,7 @@ var SIM_VS = [
   '  } else {',
   '    p = mod(p + u_res, u_res);',
   '  }',
-  '  v_pos = p; v_vel = v; v_age = age;',
+  '  v_pos3 = vec3(p, age); v_vel = v;',
   '  gl_Position = vec4(0.0);',
   '}'].join('\n');
 
@@ -227,7 +230,7 @@ if (!sv || !sf || !dv || !df) return;
 
 var SP = GL.createProgram();
 GL.attachShader(SP, sv); GL.attachShader(SP, sf);
-GL.transformFeedbackVaryings(SP, ['v_pos', 'v_vel', 'v_age'], GL.INTERLEAVED_ATTRIBS);
+GL.transformFeedbackVaryings(SP, ['v_pos3', 'v_vel'], GL.INTERLEAVED_ATTRIBS);
 GL.linkProgram(SP);
 if (!GL.getProgramParameter(SP, GL.LINK_STATUS)) { err('sim link: ' + GL.getProgramInfoLog(SP)); return; }
 
@@ -243,7 +246,7 @@ GL.enable(GL.BLEND);
 GL.blendFuncSeparate(GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA, GL.ONE, GL.ONE_MINUS_SRC_ALPHA);
 
 var L_SP = GL.getAttribLocation(SP, 'a_pos'), L_SV = GL.getAttribLocation(SP, 'a_vel'),
-    L_SA = GL.getAttribLocation(SP, 'a_age'), L_SS = GL.getAttribLocation(SP, 'a_seed'),
+    L_SS = GL.getAttribLocation(SP, 'a_seed'),
     L_SI = GL.getAttribLocation(SP, 'a_id');
 var U_SRES = GL.getUniformLocation(SP, 'u_res'), U_DT = GL.getUniformLocation(SP, 'u_dt'),
     U_MOUSE = GL.getUniformLocation(SP, 'u_mouse'), U_AT = GL.getUniformLocation(SP, 'u_attract'),
@@ -260,7 +263,9 @@ var DIFF = qnum('diff', 0.55);
 var DOT = qnum('dot', 1.6);
 var LIFETIME = qnum('life', 6.0);
 // bounds: respawn(默认) | wrap
-var BOUNDS = /[?&]bounds=wrap/.test(location.search) ? 0.0 : 1.0;
+// 默认用 wrap：寿命+重生功能目前有 bug（粒子会消失），先默认关闭。
+// 想要试重生可以加 ?bounds=respawn。
+var BOUNDS = /[?&]bounds=respawn/.test(location.search) ? 1.0 : 0.0;
 var W = 1, H = 1, DPR = 1;
 var bufA = null, bufB = null, colBuf = null, alBuf = null, seedBuf = null, idBuf = null, TF = null;
 // 鼠标坐标初始必须放在画面内。
@@ -317,6 +322,24 @@ function allocState(n) {
   }
   GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
   GL.bufferData(GL.ARRAY_BUFFER, st, GL.DYNAMIC_COPY);
+
+  // ── 诊断：立刻读回 GPU 上的 bufA，验证初始 age 是否分散 ──
+  try {
+    var chk = new Float32Array(10 * 5);
+    GL.getBufferSubData(GL.ARRAY_BUFFER, 0, chk);
+    var ages = [];
+    for (var q2 = 0; q2 < 10; q2++) ages.push(+chk[q2*5+4].toFixed(3));
+    var uniq = {};
+    for (var q3 = 0; q3 < 10; q3++) uniq[ages[q3]] = 1;
+    window.__postUpload = {
+      agesAtUpload: ages,
+      distinctIn10: Object.keys(uniq).length,
+      n: n,
+      cpuAges: [+st[4].toFixed(3), +st[9].toFixed(3), +st[14].toFixed(3)]
+    };
+  } catch (e) {
+    window.__postUpload = { error: String(e.message) };
+  }
   GL.bindBuffer(GL.ARRAY_BUFFER, bufB);
   GL.bufferData(GL.ARRAY_BUFFER, n * 20, GL.DYNAMIC_COPY);
   // 【关键修复】把 bufA 的内容复制到 bufB。
@@ -390,16 +413,17 @@ function frame(t, dt) {
   GL.bindBufferBase(GL.TRANSFORM_FEEDBACK_BUFFER, 0, bufB);
   GL.enable(GL.RASTERIZER_DISCARD);
   GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+  // a_pos 是 vec3：pos.x, pos.y, age（stride 20）
   GL.enableVertexAttribArray(L_SP); GL.vertexAttribDivisor(L_SP, 0);
-  GL.vertexAttribPointer(L_SP, 2, GL.FLOAT, false, 20, 0);
+  GL.vertexAttribPointer(L_SP, 3, GL.FLOAT, false, 20, 0);
   GL.enableVertexAttribArray(L_SV); GL.vertexAttribDivisor(L_SV, 0);
   GL.vertexAttribPointer(L_SV, 2, GL.FLOAT, false, 20, 8);
   // seed 必须来自【独立的静态缓冲】，不能复用位置数据：
   // 种子若跟着位置变，随机力在时间上就相关了，会累积成系统性漂移。
   // 这里第三维是 age（vec3 的 z），由模板反馈每帧写回。
   // a_age 从状态缓冲的 offset 16 读（状态是 [pos.xy, vel.xy, age] = 20 字节）
-  GL.enableVertexAttribArray(L_SA); GL.vertexAttribDivisor(L_SA, 1);
-  GL.vertexAttribPointer(L_SA, 1, GL.FLOAT, false, 20, 16);
+
+  // age 已并入 a_pos.z，这里不再需要单独属性
   // a_seed 来自独立的静态缓冲，只读（每粒子固定，避免随机力在时间上相关）
   GL.bindBuffer(GL.ARRAY_BUFFER, seedBuf);
   GL.enableVertexAttribArray(L_SS); GL.vertexAttribDivisor(L_SS, 1);
@@ -422,7 +446,7 @@ function frame(t, dt) {
   GL.vertexAttribPointer(LC, 2, GL.FLOAT, false, 0, 0);
   GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
   GL.enableVertexAttribArray(L_DP); GL.vertexAttribDivisor(L_DP, 1);
-  GL.vertexAttribPointer(L_DP, 2, GL.FLOAT, false, 20, 0);
+  GL.vertexAttribPointer(L_DP, 2, GL.FLOAT, false, 20, 0);   // 绘制只需 pos.xy
   GL.bindBuffer(GL.ARRAY_BUFFER, colBuf);
   GL.enableVertexAttribArray(L_DC); GL.vertexAttribDivisor(L_DC, 1);
   GL.vertexAttribPointer(L_DC, 3, GL.FLOAT, false, 0, 0);
@@ -509,7 +533,7 @@ var btnBounds = document.getElementById('btnBounds');
 function syncBoundsBtn() {
   var b = BOUNDS > 0.5;
   btnBounds.classList.toggle('on', b);
-  btnBounds.textContent = '边界：' + (b ? '重生（无分身）' : 'wrap（会分身）');
+  btnBounds.textContent = '边界：' + (b ? '重生（实验，有 bug）' : 'wrap（稳定）');
 }
 syncBoundsBtn();
 btnBounds.onclick = function () {
@@ -525,6 +549,62 @@ allocState(N);
 requestAnimationFrame(loop);
 window.__frames = 0;
 window.__ready = true;
+
+/* 报告顶点属性状态（注意：属性能否被查询取决于实现，失败就返回错误） */
+window.__attrProbe = function () {
+  function q(loc, name) {
+    var o = { name: name, loc: loc };
+    try { o.enabled = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_ENABLED); } catch (e) { o.enabled = 'ERR'; }
+    try { o.size = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_SIZE); } catch (e) {}
+    try { o.stride = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_STRIDE); } catch (e) {}
+    try { o.type = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_TYPE); } catch (e) {}
+    try { o.divisor = GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_DIVISOR); } catch (e) {}
+    try { o.offset = GL.getVertexAttribOffset(loc, GL.VERTEX_ATTRIB_ARRAY_POINTER); } catch (e) {}
+    try { o.buf = !!GL.getVertexAttrib(loc, GL.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING); } catch (e) {}
+    return o;
+  }
+  return JSON.stringify({
+    curProgramIsSP: GL.getParameter(GL.CURRENT_PROGRAM) === SP,
+    attribs: [q(L_SP, 'a_pos'), q(L_SV, 'a_vel'), q(L_SA, 'a_age'), q(L_SS, 'a_seed'), q(L_SI, 'a_id')],
+    err: GL.getError()
+  });
+};
+
+/* 实验：把 a_age 的数据源换成 idBuf（值 0..N-1），看 age 是否变分散 */
+window.__attrSwap = function () {
+  GL.bindBuffer(GL.ARRAY_BUFFER, idBuf);
+  GL.enableVertexAttribArray(L_SA);
+  GL.vertexAttribDivisor(L_SA, 1);
+  GL.vertexAttribPointer(L_SA, 1, GL.FLOAT, false, 4, 0);
+  return 'swapped a_age source -> idBuf (值 0..N-1)';
+};
+
+/* age 分布跟踪：用于定位"粒子几秒后全死" */
+window.__ageStats = function () {
+  var n = N;
+  var f = new Float32Array(n * 5);
+  GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+  GL.getBufferSubData(GL.ARRAY_BUFFER, 0, f);
+  var bins = new Array(12);
+  for (var z = 0; z < 12; z++) bins[z] = 0;
+  var minA = 1e9, maxA = -1e9, sumA = 0, nan = 0, off = 0;
+  for (var i = 0; i < n; i++) {
+    var ag = f[i*5+4], x = f[i*5], y = f[i*5+1];
+    if (!isFinite(ag) || !isFinite(x) || !isFinite(y)) { nan++; continue; }
+    if (ag < minA) minA = ag;
+    if (ag > maxA) maxA = ag;
+    sumA += ag;
+    bins[Math.min(11, Math.max(0, Math.floor(ag)))]++;
+    if (x < -1 || x > W+1 || y < -1 || y > H+1) off++;
+  }
+  return JSON.stringify({
+    t: +(performance.now()/1000).toFixed(1),
+    frames: window.__frames || 0,
+    minA: +minA.toFixed(2), maxA: +maxA.toFixed(2), avgA: +(sumA/n).toFixed(2),
+    nan: nan, offscreen: off, bins: bins,
+    N: n, life: LIFETIME, bounds: BOUNDS, W: W, H: H
+  });
+};
 
 /* ═════ 诊断钩子（只在被调用时执行，无运行时开销）═════ */
 window.__dbg2 = function () {
@@ -603,6 +683,30 @@ window.__dbg = {
       head: head
     });
   },
+  /* age 统计：定位"粒子几秒后消失" */
+  ages: function () {
+    var n = N;
+    var f = new Float32Array(n * 5);
+    GL.bindBuffer(GL.ARRAY_BUFFER, bufA);
+    GL.getBufferSubData(GL.ARRAY_BUFFER, 0, f);
+    var bins = new Array(12);
+    for (var z = 0; z < 12; z++) bins[z] = 0;
+    var minA = 1e9, maxA = -1e9, sumA = 0, nan = 0, off = 0;
+    for (var i = 0; i < n; i++) {
+      var ag = f[i*5+4], x = f[i*5], y = f[i*5+1];
+      if (!isFinite(ag) || !isFinite(x) || !isFinite(y)) { nan++; continue; }
+      if (ag < minA) minA = ag;
+      if (ag > maxA) maxA = ag;
+      sumA += ag;
+      bins[Math.min(11, Math.max(0, Math.floor(ag)))]++;
+      if (x < -1 || x > W+1 || y < -1 || y > H+1) off++;
+    }
+    return JSON.stringify({ frames: window.__frames || 0,
+      minA: +minA.toFixed(3), maxA: +maxA.toFixed(3), avgA: +(sumA/n).toFixed(3),
+      nan: nan, offscreen: off, bins: bins, N: n,
+      life: LIFETIME, bounds: BOUNDS, W: W, H: H });
+  },
+
   /* 空间分布：4x4 直方图 */
   grid: function () {
     var f = new Float32Array(N * 5);
