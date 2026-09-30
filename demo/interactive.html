@@ -242,12 +242,22 @@ function allocState(n) {
   var s = 20261108;
   function rnd() { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }
   var pal = [[0.62,0.72,1.0],[0.48,0.56,0.94],[0.82,0.88,1.0],[0.42,0.50,0.82],[0.96,0.86,0.60]];
-  // 初始就把粒子撒在鼠标附近的一圈里，这样一打开就能看到跟随
+  // 初始分布有两种，用 ?spawn=disc 切换：
+  //   full（默认）：均匀撒满整屏。开局就是满屏，不存在"需要散开"的问题。
+  //                 —— 这样"鼠标移开后恢复很慢"从根上不会发生，因为分布从未被破坏。
+  //   disc        ：撒在中心一个圆盘里，开局能看到一个"团"，鼠标一进来就被拉开。
+  //                 副作用是它离平衡分布很远，要靠慢扩散（位移 ∝√t）花十几秒铺开。
+  var SP_DISC = /[?&]spawn=disc/.test(location.search);
   var cx = W * 0.5, cy = H * 0.5;
   for (var i = 0; i < n; i++) {
-    var a = rnd() * 6.2831853, rr = Math.pow(rnd(), 0.45) * Math.min(W, H) * 0.47;
-    st[i*4]   = cx + Math.cos(a) * rr;
-    st[i*4+1] = cy + Math.sin(a) * rr;
+    if (SP_DISC) {
+      var a = rnd() * 6.2831853, rr = Math.pow(rnd(), 0.45) * Math.min(W, H) * 0.47;
+      st[i*4]   = cx + Math.cos(a) * rr;
+      st[i*4+1] = cy + Math.sin(a) * rr;
+    } else {
+      st[i*4]   = rnd() * W;
+      st[i*4+1] = rnd() * H;
+    }
     st[i*4+2] = (rnd() - 0.5) * 0.6;
     st[i*4+3] = (rnd() - 0.5) * 0.6;
     var c = pal[(rnd()*pal.length)|0];
